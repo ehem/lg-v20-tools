@@ -1,3 +1,22 @@
+/* **********************************************************************
+* Copyright (C) 2016 Elliott Mitchell <ehem+android@m5p.com>		*
+*									*
+*	This program is free software: you can redistribute it and/or	*
+*	modify it under the terms of the GNU General Public License as	*
+*	published by the Free Software Foundation, either version 3 of	*
+*	the License, or (at your option) any later version.		*
+*									*
+*	This program is distributed in the hope that it will be useful,	*
+*	but WITHOUT ANY WARRANTY; without even the implied warranty of	*
+*	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the	*
+*	GNU General Public License for more details.			*
+*									*
+*	You should have received a copy of the GNU General Public	*
+*	License along with this program.  If not, see			*
+*	<http://www.gnu.org/licenses/>.					*
+************************************************************************/
+
+
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <endian.h>
@@ -12,38 +31,45 @@
 #include <linux/fs.h>
 #include "gpt.h"
 
-static struct gpt_entry *testgpt(int fd, char *buf, int blocksh);
+static struct gpt_entry *testgpt(int fd, char *buf, size_t blocksz);
 
 const union {
 	char ch[8];
 	uint64_t num;
-} gpt_magic={{'E','F','I',' ','P','A','R','T'}};
+} gpt_magic={GPT_MAGIC};
 
 
 #ifdef GPT_MAIN
 int main(int argc, char **argv)
 {
+	struct gpt_data *data;
 	int f;
-	if(argc==2) {
-		if((f=open(argv[1], O_RDONLY))<0) {
-			fprintf(stderr, "%s: open() failed: %s\n", argv[0], strerror(errno));
-			exit(1);
-		}
-		loadgpt(f);
+	if(argc!=2) {
+		fprintf(stderr, "%s <GPT file>\n", argv[0]);
+		exit(128);
 	}
-	return 0;
+	if((f=open(argv[1], O_RDONLY))<0) {
+		fprintf(stderr, "%s: open() failed: %s\n", argv[0], strerror(errno));
+		exit(4);
+	}
+	if((data=loadgpt(f, GPT_ANY))) {
+		printf("%s: Found GPT in \"%s\"\n", argv[0], argv[1]);
+		return 0;
+	}
+	printf("%s: No GPT found in \"%s\"\n", argv[0], argv[1]);
+	return 1;
 }
 #endif
 
-struct gpt_data *loadgpt(int fd)
+struct gpt_data *loadgpt(int fd, enum gpt_type type)
 {
 	struct gpt_data *ret;
 	struct gpt_entry *ebuf;
 	char buf[512];
 	uint32_t esz;
 	uint32_t i, cnt;
-	uint32_t blocksz, blocksh;
-	struct gpt_header __;
+	size_t blocksz;
+	struct gpt_header __, *head;
 	int f16[]={&__.major-(uint16_t *)&__, &__.minor-(uint16_t *)&__},
 f32[]={&__.headerSize-(uint32_t *)&__, &__.headerCRC32-(uint32_t *)&__,
 &__.reserved-(uint32_t *)&__, &__.entryCount-(uint32_t *)&__,
@@ -54,40 +80,36 @@ f64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
 	iconv_t iconvctx;
 	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
 		// Success, we know the block size
-		blocksh=0;
-		for(i=16; i>0; i>>=1) {
-			if((1<<(i+blocksh))<=blocksz) blocksh+=i;
-		}
-		if(lseek(fd, 1<<blocksh, SEEK_SET)>0)
+		if(type!=GPT_BACKUP&&lseek(fd, blocksz, SEEK_SET)>0)
 			if(read(fd, buf, sizeof(buf))==sizeof(buf))
-				if((ebuf=testgpt(fd, buf, blocksh))) goto success;
-		if(lseek(fd, -(1<<blocksh), SEEK_END)>0)
+				if((ebuf=testgpt(fd, buf, blocksz))) goto success;
+		if(type!=GPT_PRIMARY&&lseek(fd, -blocksz, SEEK_END)>0)
 			if(read(fd, buf, sizeof(buf))==sizeof(buf))
-				if((ebuf=testgpt(fd, buf, blocksh))) goto success;
+				if((ebuf=testgpt(fd, buf, blocksz))) goto success;
 //		printf("DEBUG: Known blocksize failed to find GPT\n");
 		return NULL;
 	} else {
 		// Failure, we're going to have to guess the block size
-		blocksh=9;
-		while(blocksh<32) { // that is a bloody big device if 4GB blocks
-			if(lseek(fd, 1<<blocksh, SEEK_SET)>0)
+		blocksz=1<<9; // conventional 512 bytes
+		while(blocksz) { // that is a bloody big device if 4GB blocks
+			if(type!=GPT_BACKUP&&lseek(fd, blocksz, SEEK_SET)>0)
 				if(read(fd, buf, sizeof(buf))==sizeof(buf))
-					if((ebuf=testgpt(fd, buf, blocksh))) goto success;
+					if((ebuf=testgpt(fd, buf, blocksz))) goto success;
 
 
-			if(lseek(fd, -(1<<blocksh), SEEK_END)>0)
+			if(type!=GPT_PRIMARY&&lseek(fd, -blocksz, SEEK_END)>0)
 				if(read(fd, buf, sizeof(buf))==sizeof(buf))
-					if((ebuf=testgpt(fd, buf, blocksh))) goto success;
-			++blocksh;
+					if((ebuf=testgpt(fd, buf, blocksz))) goto success;
+			blocksz<<=1;
 		}
 //		printf("DEBUG: Probing failed to find GPT\n");
 		return NULL;
 	}
 
 	success:
-	ret=(struct gpt_data *)buf;
-	cnt=le32toh(ret->head.entryCount);
-	esz=le32toh(ret->head.entrySize);
+	head=(struct gpt_header *)buf;
+	cnt=le32toh(head->entryCount);
+	esz=le32toh(head->entrySize);
 	ret=malloc(sizeof(struct gpt_data)+sizeof(ret->entry[0])*cnt);
 	memcpy(ret, buf, sizeof(struct gpt_header));
 	for(i=0; i<sizeof(f16)/sizeof(f16[0]); ++i) {
@@ -100,7 +122,7 @@ f64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
 		((uint64_t *)&ret->native)[f64[i]]=le64toh(((uint64_t *)&ret->head)[f64[i]]);
 	}
 	memcpy(&ret->native.diskUuid, &ret->head.diskUuid, sizeof(uuid_t));
-	ret->blocksh=blocksh;
+	ret->blocksz=blocksz;
 	if((iconvctx=iconv_open("UTF-8", "UTF-16LE"))<0) {
 		free(ret);
 		free(ebuf);
@@ -123,12 +145,12 @@ f64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
 	}
 	iconv_close(iconvctx);
 	free(ebuf);
-//	printf("DEBUG: Found GPT with shift=%d\n", blocksh);
+//	printf("DEBUG: Found GPT with size=%zd\n", blocksz);
 
 	return ret;
 }
 
-static struct gpt_entry *testgpt(int fd, char *_buf, int blocksh)
+static struct gpt_entry *testgpt(int fd, char *_buf, size_t blocksz)
 {
 	uint32_t len, crc;
 	off_t start;
@@ -146,10 +168,10 @@ static struct gpt_entry *testgpt(int fd, char *_buf, int blocksh)
 	elen=le32toh(buf->entryCount)*le32toh(buf->entrySize);
 	ebuf=malloc(elen);
 	if(le64toh(buf->myLBA)==1) {
-		start=le64toh(buf->entryStart)<<blocksh;
+		start=le64toh(buf->entryStart)*blocksz;
 		if(lseek(fd, start, SEEK_SET)!=start) goto abort;
 	} else {
-		start=(le64toh(buf->myLBA)+1-le64toh(buf->entryStart))<<blocksh;
+		start=(le64toh(buf->myLBA)+1-le64toh(buf->entryStart))*blocksz;
 		if(lseek(fd, -start, SEEK_END)<0) goto abort;
 	}
 	if(read(fd, ebuf, elen)!=elen) goto abort;
