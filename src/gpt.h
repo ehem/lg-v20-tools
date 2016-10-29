@@ -23,11 +23,13 @@
 #include <uuid/uuid.h>
 #include <uchar.h>
 
-extern struct gpt_data *loadgpt(int fd);
+enum gpt_type;
 
-#define GPT_MAGIC 'E','F','I',' ','P','A','R','T'
+extern struct gpt_data *loadgpt(int fd, enum gpt_type);
 
-//	_gpt_size = 0x5C	# default, can be overridden by headerSize
+#define GPT_MAGIC {'E','F','I',' ','P','A','R','T'}
+
+enum gpt_type {GPT_NONE, GPT_ANY, GPT_PRIMARY, GPT_BACKUP};
 
 /* NOTE: All of these values are little-endian! */
 struct gpt_header {
@@ -73,7 +75,7 @@ struct gpt_entry_native {
 struct gpt_data {
 	struct gpt_header head;
 	struct gpt_header native;
-	int blocksh;
+	size_t blocksz;
 	struct {
 		struct gpt_entry raw;
 		struct gpt_entry_native native;
