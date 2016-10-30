@@ -53,10 +53,35 @@ int main(int argc, char **argv)
 		exit(4);
 	}
 	if((data=loadgpt(f, GPT_ANY))) {
-		printf("%s: Found GPT in \"%s\"\n", argv[0], argv[1]);
+		char buf0[37], buf1[37];
+		int i;
+		const struct gpt_header *nat=&data->native;
+		printf("Found v%hu.%hu %s GPT in \"%s\" (%zd sector size)\n",
+data->native.major, data->native.minor,
+data->native.myLBA==1?"primary":"backup", argv[1], data->blocksz);
+		uuid_unparse(data->native.diskUuid, buf0);
+		printf("device=%s\nmyLBA=%llu altLBA=%llu dataStart=%llu "
+"dataEnd=%llu\n\n", buf0, (unsigned long long)nat->myLBA,
+(unsigned long long)nat->altLBA, (unsigned long long)nat->dataStartLBA,
+(unsigned long long)nat->dataEndLBA);
+
+		for(i=0; i<nat->entryCount; ++i) {
+			if(uuid_is_null(data->entry[i].native.id)) {
+				printf("Name: <empty entry>\n");
+			} else {
+				uuid_unparse(data->entry[i].native.type, buf0);
+				uuid_unparse(data->entry[i].native.id, buf1);
+				printf("Name: \"%s\" start=%llu end=%llu\n"
+"typ=%s id=%s\n", data->entry[i].native.name,
+(unsigned long long)data->entry[i].native.startLBA,
+(unsigned long long)data->entry[i].native.endLBA, buf0, buf1);
+			}
+		}
+
+		free(data);
 		return 0;
 	}
-	printf("%s: No GPT found in \"%s\"\n", argv[0], argv[1]);
+	printf("No GPT found in \"%s\"\n", argv[1]);
 	return 1;
 }
 #endif
