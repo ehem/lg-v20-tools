@@ -19,6 +19,8 @@
 #ifndef __GPT_H__
 #define __GPT_H__
 
+#define _LARGEFILE64_SOURCE
+
 #include <stdint.h>
 #include <uuid/uuid.h>
 #include <uchar.h>
