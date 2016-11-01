@@ -17,6 +17,8 @@
 ************************************************************************/
 
 
+#define _LARGEFILE64_SOURCE
+
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <endian.h>
@@ -178,7 +180,7 @@ f64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
 static struct gpt_entry *testgpt(int fd, char *_buf, size_t blocksz)
 {
 	uint32_t len, crc;
-	off_t start;
+	off64_t start;
 	size_t elen;
 	struct gpt_header *buf=(struct gpt_header *)_buf;
 	struct gpt_entry *ebuf;
