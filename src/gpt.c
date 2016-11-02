@@ -92,7 +92,7 @@ struct gpt_data *loadgpt(int fd, enum gpt_type type)
 {
 	struct gpt_data *ret;
 	struct gpt_entry *ebuf;
-	char buf[512];
+	char *buf;
 	uint32_t esz;
 	uint32_t i, cnt;
 	size_t blocksz;
@@ -107,26 +107,25 @@ f64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
 	iconv_t iconvctx;
 	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
 		// Success, we know the block size
-		if(type!=GPT_BACKUP&&lseek(fd, blocksz, SEEK_SET)>0)
-			if(read(fd, buf, sizeof(buf))==sizeof(buf))
-				if((ebuf=testgpt(fd, buf, blocksz))) goto success;
-		if(type!=GPT_PRIMARY&&lseek(fd, -blocksz, SEEK_END)>0)
-			if(read(fd, buf, sizeof(buf))==sizeof(buf))
-				if((ebuf=testgpt(fd, buf, blocksz))) goto success;
+		if(!(buf=malloc(blocksz))) return NULL;
+		if((type!=GPT_BACKUP&&lseek(fd, blocksz, SEEK_SET)>0)&&
+(read(fd, buf, blocksz)==blocksz)&&(ebuf=testgpt(fd, buf, blocksz))) goto success;
+		if((type!=GPT_PRIMARY&&lseek(fd, -blocksz, SEEK_END)>0)&&
+(read(fd, buf, blocksz)==blocksz)&&(ebuf=testgpt(fd, buf, blocksz))) goto success;
 //		printf("DEBUG: Known blocksize failed to find GPT\n");
+		free(buf);
 		return NULL;
 	} else {
 		// Failure, we're going to have to guess the block size
 		blocksz=1<<9; // conventional 512 bytes
-		while(blocksz) { // that is a bloody big device if 4GB blocks
-			if(type!=GPT_BACKUP&&lseek(fd, blocksz, SEEK_SET)>0)
-				if(read(fd, buf, sizeof(buf))==sizeof(buf))
-					if((ebuf=testgpt(fd, buf, blocksz))) goto success;
+		while(blocksz<(1<<24)) { // that is a big device if 16MB blocks
+			if(!(buf=malloc(blocksz))) return NULL;
+			if((type!=GPT_BACKUP&&lseek(fd, blocksz, SEEK_SET)>0)&&
+(read(fd, buf, blocksz)==blocksz)&&(ebuf=testgpt(fd, buf, blocksz))) goto success;
 
-
-			if(type!=GPT_PRIMARY&&lseek(fd, -blocksz, SEEK_END)>0)
-				if(read(fd, buf, sizeof(buf))==sizeof(buf))
-					if((ebuf=testgpt(fd, buf, blocksz))) goto success;
+			if((type!=GPT_PRIMARY&&lseek(fd, -blocksz, SEEK_END)>0)
+&&(read(fd, buf, blocksz)==blocksz)&&(ebuf=testgpt(fd, buf, blocksz))) goto success;
+			free(buf);
 			blocksz<<=1;
 		}
 //		printf("DEBUG: Probing failed to find GPT\n");
@@ -137,7 +136,7 @@ f64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
 	head=(struct gpt_header *)buf;
 	cnt=le32toh(head->entryCount);
 	esz=le32toh(head->entrySize);
-	ret=malloc(sizeof(struct gpt_data)+sizeof(ret->entry[0])*cnt);
+	if(!(ret=malloc(sizeof(struct gpt_data)+sizeof(ret->entry[0])*cnt))) return NULL;
 	memcpy(ret, buf, sizeof(struct gpt_header));
 	for(i=0; i<sizeof(f16)/sizeof(f16[0]); ++i) {
 		((uint16_t *)&ret->native)[f16[i]]=le16toh(((uint16_t *)&ret->head)[f16[i]]);
@@ -151,6 +150,7 @@ f64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
 	memcpy(&ret->native.diskUuid, &ret->head.diskUuid, sizeof(uuid_t));
 	ret->blocksz=blocksz;
 	if((iconvctx=iconv_open("UTF-8", "UTF-16LE"))<0) {
+		free(buf);
 		free(ret);
 		free(ebuf);
 		return NULL;
@@ -171,6 +171,7 @@ f64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
 		iconv(iconvctx, &in, &inlen, &out, &outlen);
 	}
 	iconv_close(iconvctx);
+	free(buf);
 	free(ebuf);
 //	printf("DEBUG: Found GPT with size=%zd\n", blocksz);
 
@@ -186,6 +187,7 @@ static struct gpt_entry *testgpt(int fd, char *_buf, size_t blocksz)
 	struct gpt_entry *ebuf;
 	if(buf->magic!=gpt_magic.num) return NULL;
 	len=le32toh(buf->headerSize);
+	if(len<GPT_SIZE||len>blocksz) return NULL;
 	crc=crc32(0, (Byte *)buf, (char *)&buf->headerCRC32-(char *)&buf->magic);
 	crc=crc32(crc, (Byte *)"\x00\x00\x00\x00", 4);
 	crc=crc32(crc, (Byte *)&buf->reserved, len-((char *)&buf->reserved-(char *)&buf->magic));
@@ -193,7 +195,7 @@ static struct gpt_entry *testgpt(int fd, char *_buf, size_t blocksz)
 
 	crc=le32toh(buf->entryCRC32);
 	elen=le32toh(buf->entryCount)*le32toh(buf->entrySize);
-	ebuf=malloc(elen);
+	if(!(ebuf=malloc(elen))) return NULL;
 	if(le64toh(buf->myLBA)==1) {
 		start=le64toh(buf->entryStart)*blocksz;
 		if(lseek(fd, start, SEEK_SET)!=start) goto abort;
@@ -207,7 +209,7 @@ static struct gpt_entry *testgpt(int fd, char *_buf, size_t blocksz)
 	return ebuf;
 
 abort:
-	free(ebuf);
+	if(ebuf) free(ebuf);
 	return NULL;
 }
 
