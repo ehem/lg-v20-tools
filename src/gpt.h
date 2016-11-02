@@ -31,6 +31,9 @@ extern struct gpt_data *loadgpt(int fd, enum gpt_type);
 
 #define GPT_MAGIC {'E','F','I',' ','P','A','R','T'}
 
+/* This is without the tail padding inserted by most compilers... */
+#define GPT_SIZE 0x5C
+
 enum gpt_type {GPT_NONE, GPT_ANY, GPT_PRIMARY, GPT_BACKUP};
 
 /* NOTE: All of these values are little-endian! */
