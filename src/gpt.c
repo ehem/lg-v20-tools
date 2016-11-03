@@ -295,3 +295,23 @@ iconv_t iconvctx)
 {
 } */
 
+
+bool comparegpt(const struct gpt_data *a, const struct gpt_data *b)
+{
+	/* Note: If they've got differing entry counts, the main structure will
+	** differ, and memcmp() will have already returned.
+	** We also need to skip myLBA and altLBA since we want to return true
+	** for comparing a Primary and Secondary; in turn this throws out
+	** headerCRC32.
+	** entryStart is also an issue. */
+	if(memcmp(a, b, (char *)&a->head.headerCRC32-(char *)a)) return false;
+	if(a->head.reserved!=b->head.reserved) return false;
+	if(memcmp(&a->head.dataStartLBA, &b->head.dataStartLBA,
+(char *)&a->head.entryStart-(char *)&a->head.dataStartLBA)) return false;
+	if(memcmp(&a->head.entryCount, &b->head.entryCount,
+(char *)&a->head.entryCRC32-(char *)&a->head.entryCount)) return false;
+	if(memcmp(a->entry, b->entry, sizeof(struct gpt_entry)*a->head.entryCount)) return false;
+
+	return true;
+}
+
