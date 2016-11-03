@@ -25,18 +25,9 @@
 #include <uuid/uuid.h>
 #include <uchar.h>
 
-enum gpt_type;
 
-extern struct gpt_data *loadgpt(int fd, enum gpt_type);
-
-#define GPT_MAGIC {'E','F','I',' ','P','A','R','T'}
-
-/* This is without the tail padding inserted by most compilers... */
-#define GPT_SIZE 0x5C
-
-enum gpt_type {GPT_NONE, GPT_ANY, GPT_PRIMARY, GPT_BACKUP};
-
-/* NOTE: All of these values are little-endian! */
+/* Values from the GPT header */
+/* NOTE: All of these values are little-endian on storage media! */
 struct gpt_header {
 	uint64_t magic;		// "EFI PART"
 	uint16_t minor, major;  // major=1, minor=0 at this time
@@ -55,37 +46,40 @@ struct gpt_header {
 	uint8_t reserved2[];	// headerSize - 0x5C bytes
 };
 
-
-//	_gpt_slice_length = 128 # this is *default*!
-
-/* NOTE: All of these values are little-endian! */
+/* Entries for the storage slices */
 struct gpt_entry {
 	uuid_t type;
 	uuid_t id;
 	uint64_t startLBA;
 	uint64_t endLBA;
 	uint64_t flags;
-	char16_t name[28];
+	char name[109]; /* UTF-8 uses at most 3 bytes for every 2 of UTF-16 */
 };
 
-struct gpt_entry_native {
-	uuid_t type;
-	uuid_t id;
-	uint64_t startLBA;
-	uint64_t endLBA;
-	uint64_t flags;
-	char name[85]; // UTF-8 uses at most 3 bytes for every 2 of UTF-16
-};
-
+/* structure holding all the information from the GPT */
 struct gpt_data {
 	struct gpt_header head;
-	struct gpt_header native;
 	size_t blocksz;
-	struct {
-		struct gpt_entry raw;
-		struct gpt_entry_native native;
-	} entry[];
+	struct gpt_entry entry[];
 };
+
+/* magic number in the GPT header */
+extern const union _gpt_magic {
+	char ch[8];
+	uint64_t num;
+} gpt_magic;
+
+/* This is without the tail padding inserted by most compilers... */
+#define GPT_SIZE 0x5C
+
+/* used for telling loadgpt() which type to look for */
+enum gpt_type {GPT_NONE, GPT_ANY, GPT_PRIMARY, GPT_BACKUP};
+
+/* load data from a GPT */
+extern struct gpt_data *readgpt(int fd, enum gpt_type);
+
+/* write the given GPT to storage media */
+// extern bool writegpt(int fd, const struct gpt_data *gpt);
 
 #endif
 

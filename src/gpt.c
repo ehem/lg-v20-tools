@@ -31,14 +31,41 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <linux/fs.h>
+
 #include "gpt.h"
 
-static struct gpt_entry *testgpt(int fd, char *buf, size_t blocksz);
 
-const union {
-	char ch[8];
-	uint64_t num;
-} gpt_magic={GPT_MAGIC};
+/* The magic number for the GPT */
+const union _gpt_magic gpt_magic={.ch={'E','F','I',' ','P','A','R','T'}};
+
+
+/* NOTE: All of these values are little-endian on storage media! */
+struct _gpt_entry {
+	uuid_t type;
+	uuid_t id;
+	uint64_t startLBA;
+	uint64_t endLBA;
+	uint64_t flags;
+	char16_t name[36];
+};
+
+/* temporary structure which can overlay gpt_data */
+struct _gpt_data {
+	struct gpt_header head;
+	size_t blocksz;
+	struct _gpt_entry entry[];
+};
+
+
+static bool testgpt(int fd, char **buf, size_t blocksz);
+
+static void gpt_raw2native(struct gpt_data *);
+
+// static void gpt_native2raw(struct gpt_data *);
+
+static void gpt_entry_raw2native(struct gpt_entry *, struct _gpt_entry *, iconv_t);
+
+// static void gpt_entry_native2raw(struct _gpt_entry *, struct gpt_entry *, iconv_t);
 
 
 #ifdef GPT_MAIN
@@ -54,29 +81,29 @@ int main(int argc, char **argv)
 		fprintf(stderr, "%s: open() failed: %s\n", argv[0], strerror(errno));
 		exit(4);
 	}
-	if((data=loadgpt(f, GPT_ANY))) {
+	if((data=readgpt(f, GPT_ANY))) {
 		char buf0[37], buf1[37];
 		int i;
-		const struct gpt_header *nat=&data->native;
+		const struct gpt_header *nat=&data->head;
 		printf("Found v%hu.%hu %s GPT in \"%s\" (%zd sector size)\n",
-data->native.major, data->native.minor,
-data->native.myLBA==1?"primary":"backup", argv[1], data->blocksz);
-		uuid_unparse(data->native.diskUuid, buf0);
+data->head.major, data->head.minor,
+data->head.myLBA==1?"primary":"backup", argv[1], data->blocksz);
+		uuid_unparse(data->head.diskUuid, buf0);
 		printf("device=%s\nmyLBA=%llu altLBA=%llu dataStart=%llu "
 "dataEnd=%llu\n\n", buf0, (unsigned long long)nat->myLBA,
 (unsigned long long)nat->altLBA, (unsigned long long)nat->dataStartLBA,
 (unsigned long long)nat->dataEndLBA);
 
 		for(i=0; i<nat->entryCount; ++i) {
-			if(uuid_is_null(data->entry[i].native.id)) {
+			if(uuid_is_null(data->entry[i].id)) {
 				printf("Name: <empty entry>\n");
 			} else {
-				uuid_unparse(data->entry[i].native.type, buf0);
-				uuid_unparse(data->entry[i].native.id, buf1);
+				uuid_unparse(data->entry[i].type, buf0);
+				uuid_unparse(data->entry[i].id, buf1);
 				printf("Name: \"%s\" start=%llu end=%llu\n"
-"typ=%s id=%s\n", data->entry[i].native.name,
-(unsigned long long)data->entry[i].native.startLBA,
-(unsigned long long)data->entry[i].native.endLBA, buf0, buf1);
+"typ=%s id=%s\n", data->entry[i].name,
+(unsigned long long)data->entry[i].startLBA,
+(unsigned long long)data->entry[i].endLBA, buf0, buf1);
 			}
 		}
 
@@ -88,30 +115,24 @@ data->native.myLBA==1?"primary":"backup", argv[1], data->blocksz);
 }
 #endif
 
-struct gpt_data *loadgpt(int fd, enum gpt_type type)
+
+struct gpt_data *readgpt(int fd, enum gpt_type type)
 {
 	struct gpt_data *ret;
-	struct gpt_entry *ebuf;
+	struct _gpt_data *_ret;
 	char *buf;
-	uint32_t esz;
-	uint32_t i, cnt;
+	uint32_t cnt;
+	int32_t i;
 	size_t blocksz;
-	struct gpt_header __, *head;
-	int f16[]={&__.major-(uint16_t *)&__, &__.minor-(uint16_t *)&__},
-f32[]={&__.headerSize-(uint32_t *)&__, &__.headerCRC32-(uint32_t *)&__,
-&__.reserved-(uint32_t *)&__, &__.entryCount-(uint32_t *)&__,
-&__.entrySize-(uint32_t *)&__, &__.entryCRC32-(uint32_t *)&__},
-f64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
-&__.altLBA-(uint64_t *)&__, &__.dataStartLBA-(uint64_t *)&__,
-&__.dataEndLBA-(uint64_t *)&__, &__.entryStart-(uint64_t *)&__};
 	iconv_t iconvctx;
+
 	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
 		// Success, we know the block size
 		if(!(buf=malloc(blocksz))) return NULL;
 		if((type!=GPT_BACKUP&&lseek(fd, blocksz, SEEK_SET)>0)&&
-(read(fd, buf, blocksz)==blocksz)&&(ebuf=testgpt(fd, buf, blocksz))) goto success;
+(read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
 		if((type!=GPT_PRIMARY&&lseek(fd, -blocksz, SEEK_END)>0)&&
-(read(fd, buf, blocksz)==blocksz)&&(ebuf=testgpt(fd, buf, blocksz))) goto success;
+(read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
 //		printf("DEBUG: Known blocksize failed to find GPT\n");
 		free(buf);
 		return NULL;
@@ -121,10 +142,10 @@ f64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
 		while(blocksz<(1<<24)) { // that is a big device if 16MB blocks
 			if(!(buf=malloc(blocksz))) return NULL;
 			if((type!=GPT_BACKUP&&lseek(fd, blocksz, SEEK_SET)>0)&&
-(read(fd, buf, blocksz)==blocksz)&&(ebuf=testgpt(fd, buf, blocksz))) goto success;
+(read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
 
 			if((type!=GPT_PRIMARY&&lseek(fd, -blocksz, SEEK_END)>0)
-&&(read(fd, buf, blocksz)==blocksz)&&(ebuf=testgpt(fd, buf, blocksz))) goto success;
+&&(read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
 			free(buf);
 			blocksz<<=1;
 		}
@@ -132,84 +153,145 @@ f64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
 		return NULL;
 	}
 
-	success:
-	head=(struct gpt_header *)buf;
-	cnt=le32toh(head->entryCount);
-	esz=le32toh(head->entrySize);
-	if(!(ret=malloc(sizeof(struct gpt_data)+sizeof(ret->entry[0])*cnt))) return NULL;
-	memcpy(ret, buf, sizeof(struct gpt_header));
-	for(i=0; i<sizeof(f16)/sizeof(f16[0]); ++i) {
-		((uint16_t *)&ret->native)[f16[i]]=le16toh(((uint16_t *)&ret->head)[f16[i]]);
-	}
-	for(i=0; i<sizeof(f32)/sizeof(f32[0]); ++i) {
-		((uint32_t *)&ret->native)[f32[i]]=le32toh(((uint32_t *)&ret->head)[f32[i]]);
-	}
-	for(i=0; i<sizeof(f64)/sizeof(f64[0]); ++i) {
-		((uint64_t *)&ret->native)[f64[i]]=le64toh(((uint64_t *)&ret->head)[f64[i]]);
-	}
-	memcpy(&ret->native.diskUuid, &ret->head.diskUuid, sizeof(uuid_t));
+success:
+	// realloc()ed by testgpt
+	_ret=(struct _gpt_data *)buf;
+	ret=(struct gpt_data *)_ret;
+
+	gpt_raw2native(ret);
 	ret->blocksz=blocksz;
-	if((iconvctx=iconv_open("UTF-8", "UTF-16LE"))<0) {
-		free(buf);
+	cnt=ret->head.entryCount;
+
+	/* This is a legal situation, but one some distance in the future.  As
+	** such, make sure we don't SEGV, but this needs to be handled!  TODO */
+	if(ret->head.entrySize>sizeof(struct gpt_entry)) {
 		free(ret);
-		free(ebuf);
 		return NULL;
 	}
-	for(i=0; i<cnt; ++i) {
-		char *in, *out;
-		size_t inlen, outlen;
-		memcpy(&ret->entry[i].raw, (char *)ebuf+i*esz, esz);
-		memcpy(&ret->entry[i].native.type, &ret->entry[i].raw.type, sizeof(uuid_t));
-		memcpy(&ret->entry[i].native.id, &ret->entry[i].raw.id, sizeof(uuid_t));
-		ret->entry[i].native.startLBA=le64toh(ret->entry[i].raw.startLBA);
-		ret->entry[i].native.endLBA=le64toh(ret->entry[i].raw.endLBA);
-		ret->entry[i].native.flags=le64toh(ret->entry[i].raw.flags);
-		in=(char *)ret->entry[i].raw.name;
-		inlen=sizeof(ret->entry[i].raw.name);
-		out=ret->entry[i].native.name;
-		outlen=sizeof(ret->entry[i].native.name);
-		iconv(iconvctx, &in, &inlen, &out, &outlen);
+
+	if((iconvctx=iconv_open("UTF-8", "UTF-16LE"))<0) {
+		free(buf);
+		return NULL;
 	}
+
+	for(i=cnt-1; i>=0; --i)
+		gpt_entry_raw2native(ret->entry+i, _ret->entry+i, iconvctx);
+
 	iconv_close(iconvctx);
-	free(buf);
-	free(ebuf);
+
 //	printf("DEBUG: Found GPT with size=%zd\n", blocksz);
 
 	return ret;
 }
 
-static struct gpt_entry *testgpt(int fd, char *_buf, size_t blocksz)
+static bool testgpt(int fd, char **_buf, size_t blocksz)
 {
 	uint32_t len, crc;
 	off64_t start;
-	size_t elen;
-	struct gpt_header *buf=(struct gpt_header *)_buf;
-	struct gpt_entry *ebuf;
-	if(buf->magic!=gpt_magic.num) return NULL;
-	len=le32toh(buf->headerSize);
-	if(len<GPT_SIZE||len>blocksz) return NULL;
-	crc=crc32(0, (Byte *)buf, (char *)&buf->headerCRC32-(char *)&buf->magic);
+	size_t newlen, elen;
+	struct gpt_header *head=(struct gpt_header *)*_buf;
+	struct gpt_data *ret;
+	uint32_t cnt;
+
+	if(head->magic!=gpt_magic.num) return false;
+	len=le32toh(head->headerSize);
+	if(len<GPT_SIZE||len>blocksz) return false;
+	crc=crc32(0, (Byte *)head, (char *)&head->headerCRC32-(char *)&head->magic);
 	crc=crc32(crc, (Byte *)"\x00\x00\x00\x00", 4);
-	crc=crc32(crc, (Byte *)&buf->reserved, len-((char *)&buf->reserved-(char *)&buf->magic));
-	if(le32toh(buf->headerCRC32)!=crc) return NULL;
+	crc=crc32(crc, (Byte *)&head->reserved, len-((char *)&head->reserved-(char *)&head->magic));
+	if(le32toh(head->headerCRC32)!=crc) return false;
 
-	crc=le32toh(buf->entryCRC32);
-	elen=le32toh(buf->entryCount)*le32toh(buf->entrySize);
-	if(!(ebuf=malloc(elen))) return NULL;
-	if(le64toh(buf->myLBA)==1) {
-		start=le64toh(buf->entryStart)*blocksz;
-		if(lseek(fd, start, SEEK_SET)!=start) goto abort;
+	elen=le32toh(head->entryCount)*(cnt=le32toh(head->entrySize));
+	newlen=sizeof(struct gpt_data)+sizeof(struct gpt_entry)*cnt;
+	if(elen>newlen) newlen=elen;
+	if(newlen>blocksz&&!(ret=realloc(*_buf, newlen))) return false;
+
+	*_buf=(char *)(head=(struct gpt_header *)ret);
+	if(le64toh(head->myLBA)==1) {
+		start=le64toh(head->entryStart)*blocksz;
+		if(lseek(fd, start, SEEK_SET)!=start) return false;
 	} else {
-		start=(le64toh(buf->myLBA)+1-le64toh(buf->entryStart))*blocksz;
-		if(lseek(fd, -start, SEEK_END)<0) goto abort;
+		start=(le64toh(head->myLBA)+1-le64toh(head->entryStart))*blocksz;
+		if(lseek(fd, -start, SEEK_END)<0) return false;
 	}
-	if(read(fd, ebuf, elen)!=elen) goto abort;
-	if(crc32(0, (Byte *)ebuf, elen)!=crc) goto abort;
+	if(read(fd, ret->entry, elen)!=elen) return false;
 
-	return ebuf;
+	crc=crc32(0, (Byte *)ret->entry, elen);
+	if(le32toh(head->entryCRC32)!=crc) return false;
 
-abort:
-	if(ebuf) free(ebuf);
-	return NULL;
+	return true;
 }
+
+
+/* bool writegpt(int fd, const struct gpt_data *gpt)
+{
+} */
+
+
+/* these are shared by the following two functions */
+static const struct gpt_header __;
+static const int _field16[]={&__.major-(uint16_t *)&__, &__.minor-(uint16_t *)&__},
+_field32[]={&__.headerSize-(uint32_t *)&__, &__.headerCRC32-(uint32_t *)&__,
+&__.reserved-(uint32_t *)&__, &__.entryCount-(uint32_t *)&__,
+&__.entrySize-(uint32_t *)&__, &__.entryCRC32-(uint32_t *)&__},
+_field64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
+&__.altLBA-(uint64_t *)&__, &__.dataStartLBA-(uint64_t *)&__,
+&__.dataEndLBA-(uint64_t *)&__, &__.entryStart-(uint64_t *)&__};
+
+void gpt_raw2native(struct gpt_data *const d)
+{
+	int i;
+	for(i=0; i<sizeof(_field16)/sizeof(_field16[0]); ++i) {
+		uint16_t *const v=(uint16_t *)&d->head;
+		v[_field16[i]]=le16toh(v[_field16[i]]);
+	}
+	for(i=0; i<sizeof(_field32)/sizeof(_field32[0]); ++i) {
+		uint32_t *const v=(uint32_t *)&d->head;
+		v[_field32[i]]=le32toh(v[_field32[i]]);
+	}
+	for(i=0; i<sizeof(_field64)/sizeof(_field64[0]); ++i) {
+		uint64_t *const v=(uint64_t *)&d->head;
+		v[_field64[i]]=le64toh(v[_field64[i]]);
+	}
+}
+
+/* void gpt_native2raw(struct gpt_data *const d)
+{
+} */
+
+
+void gpt_entry_raw2native(struct gpt_entry *dst, struct _gpt_entry *src,
+iconv_t iconvctx)
+{
+	char *in, *out, *outp;
+	size_t inlen, outlen;
+
+	in=(char *)src->name;
+	inlen=sizeof(src->name);
+	// need a temporary buffer since dst->name and src->name could overlap
+	outp=out=alloca(sizeof(dst->name));
+	outlen=sizeof(dst->name);
+	iconv(iconvctx, &in, &inlen, &outp, &outlen);
+
+	// ensure the buffer is terminated (unsure whether iconv guarentees)
+	out[sizeof(dst->name)-1]='\0';
+	strcpy(dst->name, out);
+	outlen=strlen(dst->name);
+
+	memset(dst->name+outlen, 0, sizeof(*dst)-(dst->name+outlen-(char*)dst));
+
+	dst->flags=le64toh(src->flags);
+	dst->endLBA=le64toh(src->endLBA);
+	dst->startLBA=le64toh(src->startLBA);
+
+	// UUIDs are binary strings
+	memcpy(dst->id, src->id, sizeof(uuid_t));
+	memcpy(dst->type, src->type, sizeof(uuid_t));
+}
+
+
+/* void gpt_entry_native2raw(struct _gpt_entry *dst, struct gpt_entry *src,
+iconv_t iconvctx)
+{
+} */
 
