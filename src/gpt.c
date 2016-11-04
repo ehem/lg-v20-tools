@@ -311,14 +311,40 @@ bool comparegpt(const struct gpt_data *a, const struct gpt_data *b)
 	** differ, and memcmp() will have already returned.
 	** We also need to skip myLBA and altLBA since we want to return true
 	** for comparing a Primary and Secondary; in turn this throws out
-	** headerCRC32.
-	** entryStart is also an issue. */
+	** headerCRC32. */
 	if(memcmp(a, b, (char *)&a->head.headerCRC32-(char *)a)) return false;
+	/* notably data start/end and the media UUID */
 	if(a->head.reserved!=b->head.reserved) return false;
 	if(memcmp(&a->head.dataStartLBA, &b->head.dataStartLBA,
 (char *)&a->head.entryStart-(char *)&a->head.dataStartLBA)) return false;
 	if(memcmp(&a->head.entryCount, &b->head.entryCount,
 (char *)&a->head.entryCRC32-(char *)&a->head.entryCount)) return false;
+
+	/* Appears LG's tools place the entries at the start of the reserved
+	** area.  Just after the GPT header for primary, just after the end
+	** of the data area for secondary. (both of these tend to be 1) */
+	if(
+(a->head.entryStart-(a->head.myLBA==1?a->head.myLBA:a->head.dataEndLBA)) !=
+(b->head.entryStart-(b->head.myLBA==1?b->head.myLBA:b->head.dataEndLBA)))
+return false;
+
+	/* This is the space between the start of the entries and the end of
+	** the reserved area. (both of these tend to be 32) */
+	if(
+((a->head.myLBA==1?a->head.dataStartLBA:a->head.myLBA)-a->head.entryStart) !=
+((b->head.myLBA==1?b->head.dataStartLBA:b->head.myLBA)-b->head.entryStart))
+return false;
+
+	/* This is simply the full area reserved for slice^Wpartition entries.
+	** These three tests are redundant, any *one* of the three can be
+	** removed.  This serves as a note for writing the GPT. (both of these
+	** tend to be 33) */
+	if(
+(a->head.myLBA==1?a->head.dataStartLBA-a->head.myLBA:a->head.myLBA-a->head.dataEndLBA) !=
+(b->head.myLBA==1?b->head.dataStartLBA-b->head.myLBA:b->head.myLBA-b->head.dataEndLBA))
+return false;
+
+	/* compare the actual entries, *not* their combined CRC */
 	if(memcmp(a->entry, b->entry, sizeof(struct gpt_entry)*a->head.entryCount)) return false;
 
 	return true;
