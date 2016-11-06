@@ -78,8 +78,11 @@ enum gpt_type {GPT_NONE, GPT_ANY, GPT_PRIMARY, GPT_BACKUP};
 /* load data from a GPT */
 extern struct gpt_data *readgpt(int fd, enum gpt_type);
 
+/* prepare GPT structure for writing (compute CRC, check compatibility) */
+bool preparegpt(struct gpt_data *gpt);
+
 /* write the given GPT to storage media */
-// extern bool writegpt(int fd, const struct gpt_data *gpt);
+extern bool writegpt(int fd, const struct gpt_data *gpt);
 
 /* compare two in-memory GPTs (ignores data modified during write) */
 extern bool comparegpt(const struct gpt_data *, const struct gpt_data *);
