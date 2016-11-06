@@ -59,13 +59,13 @@ struct _gpt_data {
 
 static bool testgpt(int fd, char **buf, size_t blocksz);
 
-static void gpt_raw2native(struct gpt_data *);
+static void gpt_raw2native(struct gpt_header *);
 
-// static void gpt_native2raw(struct gpt_data *);
+static void gpt_native2raw(struct gpt_header *);
 
 static void gpt_entry_raw2native(struct gpt_entry *, struct _gpt_entry *, iconv_t);
 
-// static void gpt_entry_native2raw(struct _gpt_entry *, struct gpt_entry *, iconv_t);
+static void gpt_entry_native2raw(struct _gpt_entry *__restrict, const struct gpt_entry *__restrict, iconv_t);
 
 
 #ifdef GPT_MAIN
@@ -167,7 +167,7 @@ success:
 	_ret=(struct _gpt_data *)buf;
 	ret=(struct gpt_data *)_ret;
 
-	gpt_raw2native(ret);
+	gpt_raw2native(&ret->head);
 	ret->blocksz=blocksz;
 	cnt=ret->head.entryCount;
 
@@ -232,9 +232,129 @@ static bool testgpt(int fd, char **_buf, size_t blocksz)
 }
 
 
-/* bool writegpt(int fd, const struct gpt_data *gpt)
+bool writegpt(int fd, const struct gpt_data *gpt)
 {
-} */
+	struct _gpt_data *new;
+	char *buf;
+	uint32_t crc;
+	int32_t i;
+	size_t blocksz;
+	iconv_t iconvctx;
+
+	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
+		/* If the passed-in one has it set, it better be right. */
+		if(gpt->blocksz&&gpt->blocksz!=blocksz) return false;
+	} else {
+		/* Failure, hopefully it was passed in. */
+		if(!(blocksz=gpt->blocksz)) return false;
+	}
+
+	/* check for the presence of *something* vaguely sane */
+	if(!(buf=malloc(blocksz))) return false;
+	if((lseek(fd, gpt->head.myLBA*blocksz, SEEK_SET)<=0)||
+(read(fd, buf, blocksz)!=blocksz)||!testgpt(fd, &buf, blocksz)) {
+		free(buf);
+		return false;
+	}
+	free(buf);
+
+	/* we're not written for handling these situations */
+	if(gpt->head.headerSize!=GPT_SIZE) return false;
+	if(gpt->head.entrySize!=sizeof(struct _gpt_entry)) return false;
+
+	/* we don't modify the passed-in arguments... */
+	new=malloc(sizeof(struct _gpt_data)+sizeof(struct _gpt_entry)*gpt->head.entryCount);
+
+	/* keep things simple, even though we're going to modify it */
+	memcpy(new, gpt, sizeof(struct gpt_data));
+
+	if(gpt->head.myLBA==1) { /* we were passed primary */
+		if(lseek(fd, -(gpt->head.altLBA+1)*blocksz, SEEK_END)!=0) {
+			free(new);
+			return false;
+		}
+		/* convert to secondary, which we write first */
+		new->head.myLBA=new->head.altLBA;
+		new->head.altLBA=1;
+		new->head.entryStart+=new->head.dataEndLBA-new->head.altLBA;
+
+	/* we were passed secondary */
+	} else if(lseek(fd, -(gpt->head.myLBA+1)*blocksz, SEEK_END)!=0) {
+		free(new);
+		return false;
+	}
+
+	/* convert everything to little-endian */
+	if((iconvctx=iconv_open("UTF-16LE", "UTF-8"))<0) {
+		free(buf);
+		return NULL;
+	}
+
+	for(i=0; i<gpt->head.entryCount; ++i)
+		gpt_entry_native2raw(new->entry+i, gpt->entry+i, iconvctx);
+
+	iconv_close(iconvctx);
+
+	new->head.entryCRC32=crc32(0, (Byte *)new->entry, gpt->head.entrySize*gpt->head.entryCount);
+
+
+/* UEFI specification, write backupGPT first, primaryGPT second */
+
+	lseek(fd, new->head.entryStart*blocksz, SEEK_SET);
+#ifndef DISABLE_WRITES
+	write(fd, &new->head.entry, new->head.entryCount*new->head.entrySize);
+#endif
+
+	lseek(fd, new->head.myLBA*blocksz, SEEK_SET);
+	gpt_native2raw(&new->head);
+
+	crc=crc32(0, (Byte *)&new->head, (char *)&new->head.headerCRC32-(char *)&new->head.magic);
+	crc=crc32(crc, (Byte *)"\x00\x00\x00\x00", 4);
+	crc=crc32(crc, (Byte *)&new->head.reserved, GPT_SIZE-((char *)&new->head.reserved-(char *)&new->head.magic));
+
+	new->head.headerCRC32=htole32(crc);
+
+#ifndef DISABLE_WRITES
+	write(fd, &new->head, SEEK_SET);
+#endif
+
+
+	/* now for the primary */
+	gpt_raw2native(&new->head);
+
+	new->head.altLBA=new->head.myLBA;
+	new->head.myLBA=1;
+
+	new->head.entryStart-=new->head.dataEndLBA-new->head.altLBA;
+
+	/* entry CRC remains the same */
+
+	lseek(fd, new->head.entryStart*blocksz, SEEK_SET);
+#ifndef DISABLE_WRITES
+	write(fd, &new->entry, new->head.entryCount*new->head.entrySize);
+#endif
+
+	lseek(fd, blocksz, SEEK_SET);
+	gpt_native2raw(&new->head);
+
+
+	crc=crc32(0, (Byte *)&new->head, (char *)&new->head.headerCRC32-(char *)&new->head.magic);
+	crc=crc32(crc, (Byte *)"\x00\x00\x00\x00", 4);
+	crc=crc32(crc, (Byte *)&new->head.reserved, GPT_SIZE-((char *)&new->head.reserved-(char *)&new->head.magic));
+
+	new->head.headerCRC32=htole32(crc);
+
+#ifndef DISABLE_WRITES
+	write(fd, &new->head, SEEK_SET);
+#endif
+
+
+	free(new);
+
+//	printf("DEBUG: Found GPT with size=%zd\n", blocksz);
+
+	return true;
+}
 
 
 /* these are shared by the following two functions */
@@ -247,38 +367,50 @@ _field64[]={&__.magic-(uint64_t *)&__, &__.myLBA-(uint64_t *)&__,
 &__.altLBA-(uint64_t *)&__, &__.dataStartLBA-(uint64_t *)&__,
 &__.dataEndLBA-(uint64_t *)&__, &__.entryStart-(uint64_t *)&__};
 
-void gpt_raw2native(struct gpt_data *const d)
+void gpt_raw2native(struct gpt_header *const d)
 {
 	int i;
 	for(i=0; i<sizeof(_field16)/sizeof(_field16[0]); ++i) {
-		uint16_t *const v=(uint16_t *)&d->head;
+		uint16_t *const v=(uint16_t *)d;
 		v[_field16[i]]=le16toh(v[_field16[i]]);
 	}
 	for(i=0; i<sizeof(_field32)/sizeof(_field32[0]); ++i) {
-		uint32_t *const v=(uint32_t *)&d->head;
+		uint32_t *const v=(uint32_t *)d;
 		v[_field32[i]]=le32toh(v[_field32[i]]);
 	}
 	for(i=0; i<sizeof(_field64)/sizeof(_field64[0]); ++i) {
-		uint64_t *const v=(uint64_t *)&d->head;
+		uint64_t *const v=(uint64_t *)d;
 		v[_field64[i]]=le64toh(v[_field64[i]]);
 	}
 }
 
-/* void gpt_native2raw(struct gpt_data *const d)
+void gpt_native2raw(struct gpt_header *const d)
 {
-} */
+	int i;
+	for(i=0; i<sizeof(_field16)/sizeof(_field16[0]); ++i) {
+		uint16_t *const v=(uint16_t *)d;
+		v[_field16[i]]=htole16(v[_field16[i]]);
+	}
+	for(i=0; i<sizeof(_field32)/sizeof(_field32[0]); ++i) {
+		uint32_t *const v=(uint32_t *)d;
+		v[_field32[i]]=htole32(v[_field32[i]]);
+	}
+	for(i=0; i<sizeof(_field64)/sizeof(_field64[0]); ++i) {
+		uint64_t *const v=(uint64_t *)d;
+		v[_field64[i]]=htole64(v[_field64[i]]);
+	}
+}
 
 
 void gpt_entry_raw2native(struct gpt_entry *dst, struct _gpt_entry *src,
 iconv_t iconvctx)
 {
-	char *in, *out, *outp;
+	char *in=(char *)src->name, out[sizeof(dst->name)], *outp=out;
 	size_t inlen, outlen;
 
 	in=(char *)src->name;
 	inlen=sizeof(src->name);
 	// need a temporary buffer since dst->name and src->name could overlap
-	outp=out=alloca(sizeof(dst->name));
 	outlen=sizeof(dst->name);
 	iconv(iconvctx, &in, &inlen, &outp, &outlen);
 
@@ -299,10 +431,31 @@ iconv_t iconvctx)
 }
 
 
-/* void gpt_entry_native2raw(struct _gpt_entry *dst, struct gpt_entry *src,
-iconv_t iconvctx)
+void gpt_entry_native2raw(struct _gpt_entry *__restrict dst,
+const struct gpt_entry *__restrict src, iconv_t iconvctx)
 {
-} */
+	const char *in;
+	char *out;
+	size_t inlen, outlen;
+
+	/* UUIDs are binary strings */
+	memcpy(dst->type, src->type, sizeof(uuid_t));
+	memcpy(dst->id, src->id, sizeof(uuid_t));
+
+	dst->startLBA=htole64(src->startLBA);
+	dst->endLBA=htole64(src->endLBA);
+	dst->flags=htole64(src->flags);
+
+	in=src->name;
+	inlen=strlen(src->name);
+	out=(char *)dst->name;
+	outlen=sizeof(dst->name);
+/* sigh, out argument should be declared "const", but isn't */
+	iconv(iconvctx, (char **)&in, &inlen, &out, &outlen);
+
+	/* ensure any remainder is cleared */
+	memset(dst->name+sizeof(dst->name)-outlen, 0, outlen);
+}
 
 
 bool comparegpt(const struct gpt_data *a, const struct gpt_data *b)
