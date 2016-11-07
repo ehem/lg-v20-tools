@@ -426,8 +426,8 @@ iconv_t iconvctx)
 	dst->startLBA=le64toh(src->startLBA);
 
 	// UUIDs are binary strings
-	memcpy(dst->id, src->id, sizeof(uuid_t));
-	memcpy(dst->type, src->type, sizeof(uuid_t));
+	uuid_copy(dst->id, src->id);
+	uuid_copy(dst->type, src->type);
 }
 
 
@@ -439,8 +439,8 @@ const struct gpt_entry *__restrict src, iconv_t iconvctx)
 	size_t inlen, outlen;
 
 	/* UUIDs are binary strings */
-	memcpy(dst->type, src->type, sizeof(uuid_t));
-	memcpy(dst->id, src->id, sizeof(uuid_t));
+	uuid_copy(dst->type, src->type);
+	uuid_copy(dst->id, src->id);
 
 	dst->startLBA=htole64(src->startLBA);
 	dst->endLBA=htole64(src->endLBA);
