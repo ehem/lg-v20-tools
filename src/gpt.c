@@ -300,12 +300,12 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 
 /* UEFI specification, write backupGPT first, primaryGPT second */
 
-	lseek(fd, new->head.entryStart*blocksz, SEEK_SET);
+	if(lseek(fd, new->head.entryStart*blocksz, SEEK_SET)<0) goto fail;
 #ifndef DISABLE_WRITES
-	write(fd, new->entry, new->head.entryCount*new->head.entrySize);
+	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) goto fail;
 #endif
 
-	lseek(fd, new->head.myLBA*blocksz, SEEK_SET);
+	if(lseek(fd, new->head.myLBA*blocksz, SEEK_SET)<0) goto fail;
 	gpt_native2raw(&new->head);
 
 	crc=crc32(0, (Byte *)&new->head, (char *)&new->head.headerCRC32-(char *)&new->head.magic);
@@ -315,7 +315,7 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 	new->head.headerCRC32=htole32(crc);
 
 #ifndef DISABLE_WRITES
-	write(fd, &new->head, sizeof(new->head));
+	if(write(fd, &new->head, sizeof(new->head))<0) goto fail;
 #endif
 
 
@@ -329,12 +329,12 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 
 	/* entry CRC remains the same */
 
-	lseek(fd, new->head.entryStart*blocksz, SEEK_SET);
+	if(lseek(fd, new->head.entryStart*blocksz, SEEK_SET)<0) goto fail;
 #ifndef DISABLE_WRITES
-	write(fd, new->entry, new->head.entryCount*new->head.entrySize);
+	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) goto fail;
 #endif
 
-	lseek(fd, blocksz, SEEK_SET);
+	if(lseek(fd, blocksz, SEEK_SET)<0) goto fail;
 	gpt_native2raw(&new->head);
 
 
@@ -350,10 +350,11 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 
 
 	free(new);
-
-//	printf("DEBUG: Found GPT with size=%zd\n", blocksz);
-
 	return true;
+
+fail:
+	free(new);
+	return false;
 }
 
 
