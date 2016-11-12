@@ -178,7 +178,7 @@ success:
 		return NULL;
 	}
 
-	if((iconvctx=iconv_open("UTF-8", "UTF-16LE"))<0) {
+	if((iconvctx=iconv_open("UTF8", "UTF16LE"))<0) {
 		free(buf);
 		return NULL;
 	}
@@ -214,6 +214,7 @@ static bool testgpt(int fd, char **_buf, size_t blocksz)
 	newlen=sizeof(struct gpt_data)+sizeof(struct gpt_entry)*cnt;
 	if(elen>newlen) newlen=elen;
 	if(newlen>blocksz&&!(ret=realloc(*_buf, newlen))) return false;
+	else ret=(struct gpt_data *)*_buf;
 
 	*_buf=(char *)(head=(struct gpt_header *)ret);
 	if(le64toh(head->myLBA)==1) {

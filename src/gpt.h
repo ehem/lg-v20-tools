@@ -19,11 +19,17 @@
 #ifndef __GPT_H__
 #define __GPT_H__
 
+#ifndef _LARGEFILE64_SOURCE
 #define _LARGEFILE64_SOURCE
+#endif
 
 #include <stdint.h>
 #include <uuid/uuid.h>
+#ifdef ANDROID
+typedef unsigned short char16_t;
+#else
 #include <uchar.h>
+#endif
 
 
 /* Values from the GPT header */
