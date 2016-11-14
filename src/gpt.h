@@ -49,7 +49,7 @@ struct gpt_header {
 	uint32_t entryCount;
 	uint32_t entrySize;
 	uint32_t entryCRC32;
-	uint8_t reserved2[];	// headerSize - 0x5C bytes
+//	uint8_t reserved2[];	// headerSize - 0x5C bytes
 };
 
 /* Entries for the storage slices */
