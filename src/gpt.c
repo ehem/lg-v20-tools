@@ -285,6 +285,15 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 		return false;
 	}
 
+	/* hopefully shouldn't ever occur, but include a sanity test */
+	{
+		uint64_t entrysz=(gpt->head.entryCount*sizeof(struct _gpt_entry)+blocksz-1)/blocksz;
+		uint64_t entry=entrysz+gpt->head.entryStart;
+
+		if(entry>=gpt->head.myLBA) return false;
+		if(entry-(new->head.dataEndLBA-new->head.altLBA)>=gpt->head.dataStartLBA) return false;
+	}
+
 	/* convert everything to little-endian */
 	if((iconvctx=iconv_open("UTF-16LE", "UTF-8"))<0) {
 		free(buf);
