@@ -267,7 +267,7 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 	new=malloc(sizeof(struct _gpt_data)+sizeof(struct _gpt_entry)*gpt->head.entryCount);
 
 	/* keep things simple, even though we're going to modify it */
-	memcpy(new, gpt, sizeof(struct gpt_data));
+	memcpy(new, gpt, sizeof(struct gpt_header));
 
 	if(gpt->head.myLBA==1) { /* we were passed primary */
 		if(lseek(fd, -(gpt->head.altLBA+1)*blocksz, SEEK_END)!=0) {
@@ -287,15 +287,16 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 
 	/* hopefully shouldn't ever occur, but include a sanity test */
 	{
-		uint64_t entrysz=(gpt->head.entryCount*sizeof(struct _gpt_entry)+blocksz-1)/blocksz;
-		uint64_t entry=entrysz+gpt->head.entryStart;
+		uint64_t entrysz=(new->head.entryCount*sizeof(struct _gpt_entry)+blocksz-1)/blocksz;
+		uint64_t entry=entrysz+new->head.entryStart;
 
-		if(entry>=gpt->head.myLBA) return false;
-		if(entry-(new->head.dataEndLBA-new->head.altLBA)>=gpt->head.dataStartLBA) return false;
+		if(entry>=new->head.myLBA) return false;
+		entry-=new->head.dataEndLBA-new->head.altLBA;
+		if(entry>=new->head.dataStartLBA) return false;
 	}
 
 	/* convert everything to little-endian */
-	if((iconvctx=iconv_open("UTF-16LE", "UTF-8"))<0) {
+	if((iconvctx=iconv_open("UTF16LE", "UTF8"))<0) {
 		free(buf);
 		return NULL;
 	}
@@ -461,11 +462,11 @@ const struct gpt_entry *__restrict src, iconv_t iconvctx)
 	inlen=strlen(src->name);
 	out=(char *)dst->name;
 	outlen=sizeof(dst->name);
-/* sigh, out argument should be declared "const", but isn't */
+/* sigh, in argument should be declared "const", but isn't */
 	iconv(iconvctx, (char **)&in, &inlen, &out, &outlen);
 
 	/* ensure any remainder is cleared */
-	memset(dst->name+sizeof(dst->name)-outlen, 0, outlen);
+	memset((char *)dst->name+sizeof(dst->name)-outlen, 0, outlen);
 }
 
 
