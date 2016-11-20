@@ -39,23 +39,6 @@
 const union _gpt_magic gpt_magic={.ch={'E','F','I',' ','P','A','R','T'}};
 
 
-/* NOTE: All of these values are little-endian on storage media! */
-struct _gpt_entry {
-	uuid_t type;
-	uuid_t id;
-	uint64_t startLBA;
-	uint64_t endLBA;
-	uint64_t flags;
-	char16_t name[36];
-};
-
-/* temporary structure which can overlay gpt_data */
-struct _gpt_data {
-	struct gpt_header head;
-	size_t blocksz;
-	struct _gpt_entry entry[];
-};
-
 
 static bool testgpt(int fd, char **buf, size_t blocksz);
 
@@ -67,62 +50,6 @@ static void gpt_entry_raw2native(struct gpt_entry *, struct _gpt_entry *, iconv_
 
 static void gpt_entry_native2raw(struct _gpt_entry *__restrict, const struct gpt_entry *__restrict, iconv_t);
 
-
-#ifdef GPT_MAIN
-/******************* moved to display_gpt.c *******************/
-int main(int argc, char **argv)
-{
-	struct gpt_data *data, *alt;
-	int f;
-	char buf0[37], buf1[37];
-	int i;
-
-	if(argc!=2) {
-		fprintf(stderr, "%s <GPT file>\n", argv[0]);
-		exit(128);
-	}
-	if((f=open(argv[1], O_RDONLY))<0) {
-		fprintf(stderr, "%s: open() failed: %s\n", argv[0], strerror(errno));
-		exit(4);
-	}
-	if(!(data=readgpt(f, GPT_ANY))) {
-		printf("No GPT found in \"%s\"\n", argv[1]);
-		return 1;
-	}
-
-	if((data->head.myLBA==1)&&(alt=readgpt(f, GPT_BACKUP))) {
-		if(comparegpt(data, alt)) printf("Found identical primary and backup GPTs\n");
-		else printf("Primary and backup GPTs differ!\n");
-		free(alt);
-	} else printf("Second GPT is absent!\n");
-
-	printf("Found v%hu.%hu %s GPT in \"%s\" (%zd sector size)\n",
-data->head.major, data->head.minor,
-data->head.myLBA==1?"primary":"backup", argv[1], data->blocksz);
-	uuid_unparse(data->head.diskUuid, buf0);
-	printf("device=%s\nmyLBA=%llu altLBA=%llu dataStart=%llu "
-"dataEnd=%llu\n\n", buf0, (unsigned long long)data->head.myLBA,
-(unsigned long long)data->head.altLBA,
-(unsigned long long)data->head.dataStartLBA,
-(unsigned long long)data->head.dataEndLBA);
-
-	for(i=0; i<data->head.entryCount; ++i) {
-		if(uuid_is_null(data->entry[i].id)) {
-			printf("Name: <empty entry>\n");
-		} else {
-			uuid_unparse(data->entry[i].type, buf0);
-			uuid_unparse(data->entry[i].id, buf1);
-			printf("Name: \"%s\" start=%llu end=%llu\n"
-"typ=%s id=%s\n", data->entry[i].name,
-(unsigned long long)data->entry[i].startLBA,
-(unsigned long long)data->entry[i].endLBA, buf0, buf1);
-		}
-	}
-
-	free(data);
-	return 0;
-}
-#endif
 
 
 struct gpt_data *readgpt(int fd, enum gpt_type type)
@@ -236,32 +163,7 @@ static bool testgpt(int fd, char **_buf, size_t blocksz)
 bool writegpt(int fd, const struct gpt_data *gpt)
 {
 	struct _gpt_data *new;
-	char *buf;
-	uint32_t crc;
-	int32_t i;
-	size_t blocksz;
-	iconv_t iconvctx;
-
-	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
-		/* If the passed-in one has it set, it better be right. */
-		if(gpt->blocksz&&gpt->blocksz!=blocksz) return false;
-	} else {
-		/* Failure, hopefully it was passed in. */
-		if(!(blocksz=gpt->blocksz)) return false;
-	}
-
-	/* check for the presence of *something* vaguely sane */
-	if(!(buf=malloc(blocksz))) return false;
-	if((lseek(fd, gpt->head.myLBA*blocksz, SEEK_SET)<=0)||
-(read(fd, buf, blocksz)!=blocksz)||!testgpt(fd, &buf, blocksz)) {
-		free(buf);
-		return false;
-	}
-	free(buf);
-
-	/* we're not written for handling these situations */
-	if(gpt->head.headerSize!=GPT_SIZE) return false;
-	if(gpt->head.entrySize!=sizeof(struct _gpt_entry)) return false;
+	bool ret;
 
 	/* we don't modify the passed-in arguments... */
 	new=malloc(sizeof(struct _gpt_data)+sizeof(struct _gpt_entry)*gpt->head.entryCount);
@@ -269,9 +171,51 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 	/* keep things simple, even though we're going to modify it */
 	memcpy(new, gpt, sizeof(struct gpt_header));
 
-	if(gpt->head.myLBA==1) { /* we were passed primary */
-		if(lseek(fd, -(gpt->head.altLBA+1)*blocksz, SEEK_END)!=0) {
-			free(new);
+	new->blocksz=gpt->blocksz;
+
+	/* convert everything to little-endian */
+	gpt_entries2raw(new, gpt);
+
+	new->head.entryCRC32=crc32(0, (Byte *)new->entry, gpt->head.entrySize*gpt->head.entryCount);
+
+	ret=_writegpt(fd, new);
+	free(new);
+
+	return ret;
+}
+
+
+bool _writegpt(int fd, struct _gpt_data *new)
+{
+	uint32_t crc;
+	size_t blocksz;
+
+	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
+		/* If the passed-in one has it set, it better be right. */
+		if(new->blocksz&&new->blocksz!=blocksz) return false;
+	} else {
+		/* Failure, hopefully it was passed in. */
+		char *buf;
+
+		if(!(blocksz=new->blocksz)) return false;
+
+		/* check for the presence of *something* vaguely sane */
+		if(!(buf=malloc(blocksz))) return false;
+		if((lseek(fd, new->head.myLBA*blocksz, SEEK_SET)<=0)||
+(read(fd, buf, blocksz)!=blocksz)||!testgpt(fd, &buf, blocksz)) {
+			free(buf);
+			return false;
+		}
+		free(buf);
+	}
+
+	/* we're not written for handling these situations */
+	if(new->head.headerSize!=GPT_SIZE) return false;
+	if(new->head.entrySize!=sizeof(struct _gpt_entry)) return false;
+
+
+	if(new->head.myLBA==1) { /* we were passed primary */
+		if(lseek(fd, -(new->head.altLBA+1)*blocksz, SEEK_END)!=0) {
 			return false;
 		}
 		/* convert to secondary, which we write first */
@@ -280,8 +224,7 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 		new->head.entryStart+=new->head.dataEndLBA-new->head.altLBA;
 
 	/* we were passed secondary */
-	} else if(lseek(fd, -(gpt->head.myLBA+1)*blocksz, SEEK_END)!=0) {
-		free(new);
+	} else if(lseek(fd, -(new->head.myLBA+1)*blocksz, SEEK_END)!=0) {
 		return false;
 	}
 
@@ -295,28 +238,16 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 		if(entry>=new->head.dataStartLBA) return false;
 	}
 
-	/* convert everything to little-endian */
-	if((iconvctx=iconv_open("UTF16LE", "UTF8"))<0) {
-		free(buf);
-		return NULL;
-	}
-
-	for(i=0; i<gpt->head.entryCount; ++i)
-		gpt_entry_native2raw(new->entry+i, gpt->entry+i, iconvctx);
-
-	iconv_close(iconvctx);
-
-	new->head.entryCRC32=crc32(0, (Byte *)new->entry, gpt->head.entrySize*gpt->head.entryCount);
 
 
 /* UEFI specification, write backupGPT first, primaryGPT second */
 
-	if(lseek(fd, new->head.entryStart*blocksz, SEEK_SET)<0) goto fail;
+	if(lseek(fd, new->head.entryStart*blocksz, SEEK_SET)<0) return false;
 #ifndef DISABLE_WRITES
-	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) goto fail;
+	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) return false;
 #endif
 
-	if(lseek(fd, new->head.myLBA*blocksz, SEEK_SET)<0) goto fail;
+	if(lseek(fd, new->head.myLBA*blocksz, SEEK_SET)<0) return false;
 	gpt_native2raw(&new->head);
 
 	crc=crc32(0, (Byte *)&new->head, (char *)&new->head.headerCRC32-(char *)&new->head.magic);
@@ -326,7 +257,7 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 	new->head.headerCRC32=htole32(crc);
 
 #ifndef DISABLE_WRITES
-	if(write(fd, &new->head, sizeof(new->head))<0) goto fail;
+	if(write(fd, &new->head, sizeof(new->head))<0) return false;
 #endif
 
 
@@ -340,12 +271,12 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 
 	/* entry CRC remains the same */
 
-	if(lseek(fd, new->head.entryStart*blocksz, SEEK_SET)<0) goto fail;
+	if(lseek(fd, new->head.entryStart*blocksz, SEEK_SET)<0) return false;
 #ifndef DISABLE_WRITES
-	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) goto fail;
+	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) return false;
 #endif
 
-	if(lseek(fd, blocksz, SEEK_SET)<0) goto fail;
+	if(lseek(fd, blocksz, SEEK_SET)<0) return false;
 	gpt_native2raw(&new->head);
 
 
@@ -360,12 +291,27 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 #endif
 
 
-	free(new);
 	return true;
+}
 
-fail:
-	free(new);
-	return false;
+
+bool gpt_entries2raw(struct _gpt_data *dst, const struct gpt_data *gpt)
+{
+	/* convert entires to little-endian */
+	iconv_t iconvctx;
+	int i;
+
+	if((iconvctx=iconv_open("UTF16LE", "UTF8"))<0) return false;
+
+	for(i=0; i<gpt->head.entryCount; ++i) {
+		struct _gpt_entry tmp;
+		gpt_entry_native2raw(&tmp, gpt->entry+i, iconvctx);
+		memcpy(dst->entry+i, &tmp, sizeof(struct _gpt_entry));
+	}
+
+	iconv_close(iconvctx);
+
+	return true;
 }
 
 

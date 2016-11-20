@@ -69,6 +69,26 @@ struct gpt_data {
 	struct gpt_entry entry[];
 };
 
+
+/* NOTE: All of these values are little-endian */
+struct _gpt_entry {
+	uuid_t type;
+	uuid_t id;
+	uint64_t startLBA;
+	uint64_t endLBA;
+	uint64_t flags;
+	char16_t name[36];
+};
+
+/* temporary structure which can overlay gpt_data */
+struct _gpt_data {
+	struct gpt_header head;
+	size_t blocksz;
+	struct _gpt_entry entry[];
+};
+
+
+
 /* magic number in the GPT header */
 extern const union _gpt_magic {
 	char ch[8];
@@ -84,14 +104,21 @@ enum gpt_type {GPT_NONE, GPT_ANY, GPT_PRIMARY, GPT_BACKUP};
 /* load data from a GPT */
 extern struct gpt_data *readgpt(int fd, enum gpt_type);
 
-/* prepare GPT structure for writing (compute CRC, check compatibility) */
-bool preparegpt(struct gpt_data *gpt);
-
-/* write the given GPT to storage media */
-extern bool writegpt(int fd, const struct gpt_data *gpt);
+/* convert the entries into storage-media format */
+extern bool gpt_entries2raw(struct _gpt_data *dst, const struct gpt_data *gpt);
 
 /* compare two in-memory GPTs (ignores data modified during write) */
 extern bool comparegpt(const struct gpt_data *, const struct gpt_data *);
+
+/* write the given host format GPT to storage media */
+extern bool writegpt(int fd, const struct gpt_data *gpt);
+
+/* WARNING: _writegpt() and __writegpt WILL modify the data */
+/* write the given GPT to storage media, where header is still in host fmt */
+extern bool _writegpt(int fd, struct _gpt_data *gpt);
+
+/* write the given GPT to storage media, which is fully prepared */
+extern bool __writegpt(int fd, struct _gpt_data *gpt);
 
 #endif
 
