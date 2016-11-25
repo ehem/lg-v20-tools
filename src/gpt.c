@@ -140,11 +140,12 @@ static bool testgpt(int fd, char **_buf, size_t blocksz)
 	elen=(cnt=le32toh(head->entryCount))*le32toh(head->entrySize);
 	newlen=sizeof(struct gpt_data)+sizeof(struct gpt_entry)*cnt;
 	if(elen+sizeof(struct gpt_data)>newlen) newlen=elen+sizeof(struct gpt_data);
-	if(newlen>blocksz) {
-		if(!(ret=realloc(*_buf, newlen))) return false;
-	} else ret=(struct gpt_data *)*_buf;
 
-	*_buf=(char *)(head=(struct gpt_header *)ret);
+	/* likely to realloc(), but once media starts using 32KB blocks... */
+	if(newlen<=blocksz) ret=(struct gpt_data *)*_buf;
+	else if(!(ret=realloc(*_buf, newlen))) return false;
+	else *_buf=(char *)(head=(struct gpt_header *)ret);
+
 	if(le64toh(head->myLBA)==1) {
 		start=le64toh(head->entryStart)*blocksz;
 		if(lseek(fd, start, SEEK_SET)!=start) return false;
