@@ -137,11 +137,12 @@ static bool testgpt(int fd, char **_buf, size_t blocksz)
 	crc=crc32(crc, (Byte *)&head->reserved, len-((char *)&head->reserved-(char *)&head->magic));
 	if(le32toh(head->headerCRC32)!=crc) return false;
 
-	elen=le32toh(head->entryCount)*(cnt=le32toh(head->entrySize));
+	elen=(cnt=le32toh(head->entryCount))*le32toh(head->entrySize);
 	newlen=sizeof(struct gpt_data)+sizeof(struct gpt_entry)*cnt;
-	if(elen>newlen) newlen=elen;
-	if(newlen>blocksz&&!(ret=realloc(*_buf, newlen))) return false;
-	else ret=(struct gpt_data *)*_buf;
+	if(elen+sizeof(struct gpt_data)>newlen) newlen=elen+sizeof(struct gpt_data);
+	if(newlen>blocksz) {
+		if(!(ret=realloc(*_buf, newlen))) return false;
+	} else ret=(struct gpt_data *)*_buf;
 
 	*_buf=(char *)(head=(struct gpt_header *)ret);
 	if(le64toh(head->myLBA)==1) {
