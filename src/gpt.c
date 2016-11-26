@@ -59,15 +59,15 @@ struct gpt_data *readgpt(int fd, enum gpt_type type)
 	char *buf;
 	uint32_t cnt;
 	int32_t i;
-	size_t blocksz;
+	off64_t blocksz;
 	iconv_t iconvctx;
 
 	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
 		// Success, we know the block size
 		if(!(buf=malloc(blocksz))) return NULL;
-		if((type!=GPT_BACKUP&&lseek(fd, blocksz, SEEK_SET)>0)&&
+		if((type!=GPT_BACKUP&&lseek64(fd, blocksz, SEEK_SET)>0)&&
 (read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
-		if((type!=GPT_PRIMARY&&lseek(fd, -blocksz, SEEK_END)>0)&&
+		if((type!=GPT_PRIMARY&&lseek64(fd, -blocksz, SEEK_END)>0)&&
 (read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
 //		printf("DEBUG: Known blocksize failed to find GPT\n");
 		free(buf);
@@ -77,10 +77,10 @@ struct gpt_data *readgpt(int fd, enum gpt_type type)
 		blocksz=1<<9; // conventional 512 bytes
 		while(blocksz<(1<<24)) { // that is a big device if 16MB blocks
 			if(!(buf=malloc(blocksz))) return NULL;
-			if((type!=GPT_BACKUP&&lseek(fd, blocksz, SEEK_SET)>0)&&
+			if((type!=GPT_BACKUP&&lseek64(fd, blocksz, SEEK_SET)>0)&&
 (read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
 
-			if((type!=GPT_PRIMARY&&lseek(fd, -blocksz, SEEK_END)>0)
+			if((type!=GPT_PRIMARY&&lseek64(fd, -blocksz, SEEK_END)>0)
 &&(read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
 			free(buf);
 			blocksz<<=1;
@@ -148,10 +148,10 @@ static bool testgpt(int fd, char **_buf, size_t blocksz)
 
 	if(le64toh(head->myLBA)==1) {
 		start=le64toh(head->entryStart)*blocksz;
-		if(lseek(fd, start, SEEK_SET)!=start) return false;
+		if(lseek64(fd, start, SEEK_SET)!=start) return false;
 	} else {
 		start=(le64toh(head->myLBA)+1-le64toh(head->entryStart))*blocksz;
-		if(lseek(fd, -start, SEEK_END)<0) return false;
+		if(lseek64(fd, -start, SEEK_END)<0) return false;
 	}
 	if(read(fd, ret->entry, elen)!=elen) return false;
 
@@ -203,7 +203,7 @@ bool _writegpt(int fd, struct _gpt_data *new)
 
 		/* check for the presence of *something* vaguely sane */
 		if(!(buf=malloc(blocksz))) return false;
-		if((lseek(fd, new->head.myLBA*blocksz, SEEK_SET)<=0)||
+		if((lseek64(fd, new->head.myLBA*blocksz, SEEK_SET)<=0)||
 (read(fd, buf, blocksz)!=blocksz)||!testgpt(fd, &buf, blocksz)) {
 			free(buf);
 			return false;
@@ -217,7 +217,7 @@ bool _writegpt(int fd, struct _gpt_data *new)
 
 
 	if(new->head.myLBA==1) { /* we were passed primary */
-		if(lseek(fd, -(new->head.altLBA+1)*blocksz, SEEK_END)!=0) {
+		if(lseek64(fd, -(new->head.altLBA+1)*blocksz, SEEK_END)!=0) {
 			return false;
 		}
 		/* convert to secondary, which we write first */
@@ -226,7 +226,7 @@ bool _writegpt(int fd, struct _gpt_data *new)
 		new->head.entryStart+=new->head.dataEndLBA-new->head.altLBA;
 
 	/* we were passed secondary */
-	} else if(lseek(fd, -(new->head.myLBA+1)*blocksz, SEEK_END)!=0) {
+	} else if(lseek64(fd, -(new->head.myLBA+1)*blocksz, SEEK_END)!=0) {
 		return false;
 	}
 
@@ -244,12 +244,12 @@ bool _writegpt(int fd, struct _gpt_data *new)
 
 /* UEFI specification, write backupGPT first, primaryGPT second */
 
-	if(lseek(fd, new->head.entryStart*blocksz, SEEK_SET)<0) return false;
+	if(lseek64(fd, new->head.entryStart*blocksz, SEEK_SET)<0) return false;
 #ifndef DISABLE_WRITES
 	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) return false;
 #endif
 
-	if(lseek(fd, new->head.myLBA*blocksz, SEEK_SET)<0) return false;
+	if(lseek64(fd, new->head.myLBA*blocksz, SEEK_SET)<0) return false;
 	gpt_native2raw(&new->head);
 
 	crc=crc32(0, (Byte *)&new->head, (char *)&new->head.headerCRC32-(char *)&new->head.magic);
@@ -273,12 +273,12 @@ bool _writegpt(int fd, struct _gpt_data *new)
 
 	/* entry CRC remains the same */
 
-	if(lseek(fd, new->head.entryStart*blocksz, SEEK_SET)<0) return false;
+	if(lseek64(fd, new->head.entryStart*blocksz, SEEK_SET)<0) return false;
 #ifndef DISABLE_WRITES
 	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) return false;
 #endif
 
-	if(lseek(fd, blocksz, SEEK_SET)<0) return false;
+	if(lseek64(fd, blocksz, SEEK_SET)<0) return false;
 	gpt_native2raw(&new->head);
 
 

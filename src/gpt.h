@@ -19,8 +19,14 @@
 #ifndef __GPT_H__
 #define __GPT_H__
 
-#ifndef _LARGEFILE64_SOURCE
-#define _LARGEFILE64_SOURCE
+#if defined(_FILE_OFFSET_BITS) && _FILE_OFFSET_BITS==64
+#define GPT_OFF_T off_t
+#elif defined(_LARGEFILE64_SOURCE)
+#define GPT_OFF_T off64_t
+#else
+#error "gpt.h needs either _FILE_OFFSET_BITS=64 or _LARGEFILE64_SOURCE defined!"
+/* suppress other warnings/errors from compiler */
+#define GPT_OFF_T long int
 #endif
 
 #include <stdint.h>
@@ -65,7 +71,7 @@ struct gpt_entry {
 /* structure holding all the information from the GPT */
 struct gpt_data {
 	struct gpt_header head;
-	size_t blocksz;
+	GPT_OFF_T blocksz;
 	struct gpt_entry entry[];
 };
 
@@ -83,7 +89,7 @@ struct _gpt_entry {
 /* temporary structure which can overlay gpt_data */
 struct _gpt_data {
 	struct gpt_header head;
-	size_t blocksz;
+	GPT_OFF_T blocksz;
 	struct _gpt_entry entry[];
 };
 
@@ -119,6 +125,9 @@ extern bool _writegpt(int fd, struct _gpt_data *gpt);
 
 /* write the given GPT to storage media, which is fully prepared */
 extern bool __writegpt(int fd, struct _gpt_data *gpt);
+
+/* don't contaiminate others' namespace */
+#undef GPT_OFF_T
 
 #endif
 
