@@ -1,0 +1,6 @@
+# Python 3 cache files
+__pycache__/
+# Python 2 cache files
+*.pyc
+# Temporary files for a particular editor
+*.swp
