@@ -26,30 +26,43 @@
 #include <android/log.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define LOGV(...) { __android_log_print(ANDROID_LOG_INFO, "dirtysanta", __VA_ARGS__); }
 
+static off64_t copyfile(const char *src, const char *dst);
+
 int main ()
 {
-    char command[100];
-    char cmd2[100];
-    char cmd3[100];
+	LOGV("Starting Backup");
+	if(copyfile("/dev/block/sde1", "/storage/emulated/0/bootbackup.img")<=0) return -1;
 
-    LOGV("Starting Backup");
-    strcpy( cmd3, "dd if=/dev/block/sde1 of=/storage/emulated/0/bootbackup.img");
-    system(cmd3);
+	if(copyfile("/dev/block/sde6", "/storage/emulated/0/abootbackup.img")<=0) return -1;
 
-    strcpy( cmd2, "dd if=/dev/block/sde6 of=/storage/emulated/0/abootbackup.img");
-    system(cmd2);
+	LOGV("Backup Complete.");
+	sleep(5);
 
-    LOGV("Backup Complete.");
-    sleep(5);
+	LOGV("Starting flash of Aboot!");
+	if(copyfile("/storage/emulated/0/aboot.img", "/dev/block/sde6")<=0) return -1;
 
-    LOGV("Starting flash of Aboot!");
-    strcpy( command, "dd if=/storage/emulated/0/aboot.img of=/dev/block/sde6" );
-    system(command);
-
-    LOGV("Finished. Please run Step 2 now.");
-    sleep(999999);
-    return(0);
+	LOGV("Finished. Please run Step 2 now.");
+	sleep(999999);
+	return(0);
 }
+
+static off64_t copyfile(const char *src, const char *dst)
+{
+	int srcfd, dstfd;
+	off64_t size;
+	char *buf;
+	if((srcfd=open(src, O_RDONLY|O_LARGEFILE))<0) return -1;
+	if((dstfd=open(dst, O_WRONLY|O_LARGEFILE|O_TRUNC|O_CREAT, 0666))<0) return -1;
+	size=lseek64(srcfd, 0, SEEK_END);
+	if(!(buf=mmap64(NULL, size, PROT_READ, MAP_PRIVATE, srcfd, 0))) return -1;
+	if(write(dstfd, buf, size)<size) return -1;
+	munmap64(buf, size);
+	close(srcfd);
+	if(close(dstfd)<0) return -1;
+	return size;
+}
+
