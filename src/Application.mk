@@ -1,0 +1,3 @@
+APP_PLATFORM := 24
+APP_ABI := arm64-v8a
+
