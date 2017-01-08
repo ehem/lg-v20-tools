@@ -24,43 +24,83 @@
 
 
 #include <android/log.h>
-#include <stdio.h>
-#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/mman.h>
+#include <fcntl.h>
 #include <unistd.h>
+#include <string.h>
+#include <stdio.h>
 
-#define LOGV(...) { __android_log_print(ANDROID_LOG_INFO, "dirtysanta", __VA_ARGS__); }
 
-static off64_t copyfile(const char *src, const char *dst);
+static const char *const log_tag="dirtysanta";
+#define LOGV(...) do { __android_log_print(ANDROID_LOG_INFO, log_tag, __VA_ARGS__); } while(0)
+
+static off_t copyfile(const char *src, const char *dst);
 
 int main ()
 {
-	LOGV("Starting Backup");
-	if(copyfile("/dev/block/sde1", "/storage/emulated/0/bootbackup.img")<=0) return -1;
+	const char *const backupdir="/storage/emulated/0/dirtysanta_backups";
+	const char *const backuplist[][2]={
+		{"/dev/block/sde1", "boot.img"},
+		{"/dev/block/sde6", "aboot.img"},
+		{"/dev/block/sde2", "recovery.img"},
+		{NULL, NULL}
+	};
+	int i;
 
-	if(copyfile("/dev/block/sde6", "/storage/emulated/0/abootbackup.img")<=0) return -1;
+	LOGV("Starting Backup");
+
+	if(mkdir(backupdir, 0777)<0&&errno!=EEXIST) {
+		fprintf(stderr, "Failed to make backup directory\n");
+		LOGV("mkdir() failed!");
+		return -1;
+	}
+
+	if(chdir(backupdir)) {
+		fprintf(stderr, "Failed to change directory to /storage/emulated/0/dirtysanta_backups\n");
+		LOGV("chdir() failed!");
+		return -1;
+	}
+
+	for(i=0; backuplist[i][0]; ++i) {
+		__android_log_print(ANDROID_LOG_DEBUG, log_tag, "Backing up %s", backuplist[i][1]);
+		if(copyfile(backuplist[i][0], backuplist[i][1])<=0) {
+			fprintf(stderr, "Failed during backup of %s\n", backuplist[i][1]);
+			LOGV("Backup of %s failed, aborting!", backuplist[i][1]);
+			return -1;
+		}
+	}
 
 	LOGV("Backup Complete.");
 	sleep(5);
 
 	LOGV("Starting flash of Aboot!");
-	if(copyfile("/storage/emulated/0/aboot.img", "/dev/block/sde6")<=0) return -1;
+	if(copyfile("../aboot.img", "/dev/block/sde6")<=0) {
+		LOGV("Flash of Aboot failed!  Trying to revert!");
+		if(copyfile("aboot.img", "/dev/block/sde6")<=0)
+			LOGV("Reinstallation of Aboot failed, phone state unknown/unsafe, PANIC!");
+		else
+			LOGV("Reinstallation of Aboot succeeded, but Dirty Santa failed.");
+		return -1;
+	}
 
 	LOGV("Finished. Please run Step 2 now.");
 	sleep(999999);
 	return(0);
 }
 
-static off64_t copyfile(const char *src, const char *dst)
+static off_t copyfile(const char *src, const char *dst)
 {
 	int srcfd, dstfd;
-	off64_t size;
+	off_t size;
 	char *buf;
 	if((srcfd=open(src, O_RDONLY|O_LARGEFILE))<0) return -1;
 	if((dstfd=open(dst, O_WRONLY|O_LARGEFILE|O_TRUNC|O_CREAT, 0666))<0) return -1;
-	size=lseek64(srcfd, 0, SEEK_END);
-	if(!(buf=mmap64(NULL, size, PROT_READ, MAP_PRIVATE, srcfd, 0))) return -1;
+	size=lseek(srcfd, 0, SEEK_END);
+	if(!(buf=mmap(NULL, size, PROT_READ, MAP_PRIVATE, srcfd, 0))) return -1;
 	if(write(dstfd, buf, size)<size) return -1;
-	munmap64(buf, size);
+	munmap(buf, size);
 	close(srcfd);
 	if(close(dstfd)<0) return -1;
 	return size;
