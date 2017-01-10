@@ -1,0 +1,108 @@
+diff -ur kernel/msm-3.18.orig/arch/arm64/crypto/aes-ce-cipher.c kernel/msm-3.18/arch/arm64/crypto/aes-ce-cipher.c
+--- kernel/msm-3.18.orig/arch/arm64/crypto/aes-ce-cipher.c	2016-09-17 01:59:44.000000000 -0700
++++ kernel/msm-3.18/arch/arm64/crypto/aes-ce-cipher.c	2017-01-08 17:05:18.355117219 -0800
+@@ -151,5 +151,8 @@
+ 	crypto_unregister_alg(&aes_alg);
+ }
+ 
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-const-variable"
+ module_cpu_feature_match(AES, aes_mod_init);
++#pragma GCC diagnostic pop
+ module_exit(aes_mod_exit);
+diff -ur kernel/msm-3.18.orig/arch/arm64/crypto/aes-glue.c kernel/msm-3.18/arch/arm64/crypto/aes-glue.c
+--- kernel/msm-3.18.orig/arch/arm64/crypto/aes-glue.c	2016-09-17 01:59:44.000000000 -0700
++++ kernel/msm-3.18/arch/arm64/crypto/aes-glue.c	2017-01-08 17:06:07.983295578 -0800
+@@ -439,7 +439,10 @@
+ }
+ 
+ #ifdef USE_V8_CRYPTO_EXTENSIONS
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-const-variable"
+ module_cpu_feature_match(AES, aes_init);
++#pragma GCC diagnostic pop
+ #else
+ module_init(aes_init);
+ #endif
+diff -ur kernel/msm-3.18.orig/arch/arm64/crypto/ghash-ce-glue.c kernel/msm-3.18/arch/arm64/crypto/ghash-ce-glue.c
+--- kernel/msm-3.18.orig/arch/arm64/crypto/ghash-ce-glue.c	2016-09-17 01:59:44.000000000 -0700
++++ kernel/msm-3.18/arch/arm64/crypto/ghash-ce-glue.c	2017-01-08 12:00:09.567836343 -0800
+@@ -152,5 +152,8 @@
+ 	crypto_unregister_shash(&ghash_alg);
+ }
+ 
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-const-variable"
+ module_cpu_feature_match(PMULL, ghash_ce_mod_init);
++#pragma GCC diagnostic pop
+ module_exit(ghash_ce_mod_exit);
+diff -ur kernel/msm-3.18.orig/arch/arm64/crypto/sha1-ce-glue.c kernel/msm-3.18/arch/arm64/crypto/sha1-ce-glue.c
+--- kernel/msm-3.18.orig/arch/arm64/crypto/sha1-ce-glue.c	2016-09-17 01:59:44.000000000 -0700
++++ kernel/msm-3.18/arch/arm64/crypto/sha1-ce-glue.c	2017-01-08 11:59:33.975688956 -0800
+@@ -170,5 +170,8 @@
+ 	crypto_unregister_shash(&alg);
+ }
+ 
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-const-variable"
+ module_cpu_feature_match(SHA1, sha1_ce_mod_init);
++#pragma GCC diagnostic pop
+ module_exit(sha1_ce_mod_fini);
+diff -ur kernel/msm-3.18.orig/arch/arm64/crypto/sha2-ce-glue.c kernel/msm-3.18/arch/arm64/crypto/sha2-ce-glue.c
+--- kernel/msm-3.18.orig/arch/arm64/crypto/sha2-ce-glue.c	2016-09-17 01:59:44.000000000 -0700
++++ kernel/msm-3.18/arch/arm64/crypto/sha2-ce-glue.c	2017-01-08 11:59:50.823758502 -0800
+@@ -250,5 +250,8 @@
+ 	crypto_unregister_shashes(algs, ARRAY_SIZE(algs));
+ }
+ 
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-const-variable"
+ module_cpu_feature_match(SHA2, sha2_ce_mod_init);
++#pragma GCC diagnostic pop
+ module_exit(sha2_ce_mod_fini);
+diff -ur kernel/msm-3.18.orig/drivers/media/platform/msm/vidc/msm_v4l2_vidc.c kernel/msm-3.18/drivers/media/platform/msm/vidc/msm_v4l2_vidc.c
+--- kernel/msm-3.18.orig/drivers/media/platform/msm/vidc/msm_v4l2_vidc.c	2016-09-17 01:59:46.000000000 -0700
++++ kernel/msm-3.18/drivers/media/platform/msm/vidc/msm_v4l2_vidc.c	2017-01-08 17:41:11.747050423 -0800
+@@ -254,8 +254,12 @@
+ 	.vidioc_enum_framesizes = msm_v4l2_enum_framesizes,
+ };
+ 
++#pragma GCC diagnostic push
++/*deprecated and should be removed?*/
++#pragma GCC diagnostic ignored "-Wunused-const-variable"
+ static const struct v4l2_ioctl_ops msm_v4l2_enc_ioctl_ops = {
+ };
++#pragma GCC diagnostic pop
+ 
+ static unsigned int msm_v4l2_poll(struct file *filp,
+ 	struct poll_table_struct *pt)
+diff -ur kernel/msm-3.18.orig/drivers/net/usb/usbnet.c kernel/msm-3.18/drivers/net/usb/usbnet.c
+--- kernel/msm-3.18.orig/drivers/net/usb/usbnet.c	2016-09-17 01:59:47.000000000 -0700
++++ kernel/msm-3.18/drivers/net/usb/usbnet.c	2017-01-08 17:43:25.731560210 -0800
+@@ -87,7 +87,11 @@
+ // randomly generated ethernet address
+ static u8	node_id [ETH_ALEN];
+ 
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-const-variable"
++/*FIXME: this looks to be an actual unused value*/
+ static const char driver_name [] = "usbnet";
++#pragma GCC diagnostic pop
+ 
+ static struct workqueue_struct	*usbnet_wq;
+ 
+diff -ur kernel/msm-3.18.orig/drivers/net/wireless/bcmdhd/src/shared/siutils.c kernel/msm-3.18/drivers/net/wireless/bcmdhd/src/shared/siutils.c
+--- kernel/msm-3.18.orig/drivers/net/wireless/bcmdhd/src/shared/siutils.c	2016-09-17 01:59:47.000000000 -0700
++++ kernel/msm-3.18/drivers/net/wireless/bcmdhd/src/shared/siutils.c	2017-01-08 17:44:24.019783914 -0800
+@@ -533,7 +533,11 @@
+ 	}
+ 
+ 	sih->bustype = bustype;
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wtautological-compare"
++/*FIXME: given GCC's warning this might really be too silly a check...*/
+ 	if (bustype != BUSTYPE(bustype)) {
++#pragma GCC diagnostic pop
+ 		SI_ERROR(("si_doattach: bus type %d does not match configured bus type %d\n",
+ 			bustype, BUSTYPE(bustype)));
+ 		return NULL;

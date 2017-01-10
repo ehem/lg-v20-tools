@@ -1,0 +1,31 @@
+diff -ur kernel/msm-3.18.orig/drivers/media/platform/msm/vidc/vmem/vmem.c kernel/msm-3.18/drivers/media/platform/msm/vidc/vmem/vmem.c
+--- kernel/msm-3.18.orig/drivers/media/platform/msm/vidc/vmem/vmem.c	2016-09-17 01:59:46.000000000 -0700
++++ kernel/msm-3.18/drivers/media/platform/msm/vidc/vmem/vmem.c	2017-01-08 11:57:32.751169393 -0800
+@@ -51,7 +51,6 @@
+  * registers.
+  */
+ #define DECLARE_TYPE(__type, __end, __start)                                   \
+-	static const unsigned int __type##_BITS = (__end) - (__start) + 1;     \
+ 	static const unsigned int __type##_SHIFT = (__start);                  \
+ 	static const unsigned int __type##_MASK = GENMASK((__end), (__start)); \
+ 	static inline unsigned int __type(uint32_t val)                        \
+diff -ur kernel/msm-3.18.orig/drivers/mmc/core/mmc.c kernel/msm-3.18/drivers/mmc/core/mmc.c
+--- kernel/msm-3.18.orig/drivers/mmc/core/mmc.c	2016-09-17 01:59:47.000000000 -0700
++++ kernel/msm-3.18/drivers/mmc/core/mmc.c	2017-01-08 11:57:32.751169393 -0800
+@@ -124,6 +124,8 @@
+ 	mmc_init_erase(card);
+ }
+ 
++#if 0
++/*where did this come from, why is this here???*/
+ static const struct mmc_fixup mmc_fixups[] = {
+ 
+ 	/* avoid HPI for specific cards */
+@@ -136,6 +138,7 @@
+ 
+ 	END_FIXUP
+ };
++#endif
+ 
+ /*
+  * Given a 128-bit response, decode to our card CSD structure.

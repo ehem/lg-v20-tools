@@ -1,0 +1,78 @@
+diff -ur kernel/msm-3.18.orig/drivers/media/platform/msm/camera_v2/msm.c kernel/msm-3.18/drivers/media/platform/msm/camera_v2/msm.c
+--- kernel/msm-3.18.orig/drivers/media/platform/msm/camera_v2/msm.c	2016-09-17 01:59:46.000000000 -0700
++++ kernel/msm-3.18/drivers/media/platform/msm/camera_v2/msm.c	2017-01-08 17:33:13.169230038 -0800
+@@ -1375,9 +1375,13 @@
+ 	if (WARN_ON(rc < 0))
+ 		goto media_fail;
+ 
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wbool-compare"
++/*DEBUG: the comparison isn't quite right here*/
+ 	if (WARN_ON((rc == media_entity_init(&pvdev->vdev->entity,
+ 			0, NULL, 0)) < 0))
+ 		goto entity_fail;
++#pragma GCC diagnostic pop
+ 
+ 	pvdev->vdev->entity.type = MEDIA_ENT_T_DEVNODE_V4L;
+ 	pvdev->vdev->entity.group_id = QCAMERA_VNODE_GROUP_ID;
+diff -ur kernel/msm-3.18.orig/drivers/media/platform/msm/vidc/msm_v4l2_vidc.c kernel/msm-3.18/drivers/media/platform/msm/vidc/msm_v4l2_vidc.c
+--- kernel/msm-3.18.orig/drivers/media/platform/msm/vidc/msm_v4l2_vidc.c	2016-09-17 01:59:46.000000000 -0700
++++ kernel/msm-3.18/drivers/media/platform/msm/vidc/msm_v4l2_vidc.c	2017-01-08 17:41:11.747050423 -0800
+@@ -254,8 +254,12 @@
+ 	.vidioc_enum_framesizes = msm_v4l2_enum_framesizes,
+ };
+ 
++#pragma GCC diagnostic push
++/*deprecated and should be removed?*/
++#pragma GCC diagnostic ignored "-Wunused-const-variable"
+ static const struct v4l2_ioctl_ops msm_v4l2_enc_ioctl_ops = {
+ };
++#pragma GCC diagnostic pop
+ 
+ static unsigned int msm_v4l2_poll(struct file *filp,
+ 	struct poll_table_struct *pt)
+diff -ur kernel/msm-3.18.orig/drivers/net/usb/usbnet.c kernel/msm-3.18/drivers/net/usb/usbnet.c
+--- kernel/msm-3.18.orig/drivers/net/usb/usbnet.c	2016-09-17 01:59:47.000000000 -0700
++++ kernel/msm-3.18/drivers/net/usb/usbnet.c	2017-01-08 17:43:25.731560210 -0800
+@@ -87,7 +87,11 @@
+ // randomly generated ethernet address
+ static u8	node_id [ETH_ALEN];
+ 
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-const-variable"
++/*FIXME: this looks to be an actual unused value*/
+ static const char driver_name [] = "usbnet";
++#pragma GCC diagnostic pop
+ 
+ static struct workqueue_struct	*usbnet_wq;
+ 
+diff -ur kernel/msm-3.18.orig/drivers/net/wireless/bcmdhd/src/shared/siutils.c kernel/msm-3.18/drivers/net/wireless/bcmdhd/src/shared/siutils.c
+--- kernel/msm-3.18.orig/drivers/net/wireless/bcmdhd/src/shared/siutils.c	2016-09-17 01:59:47.000000000 -0700
++++ kernel/msm-3.18/drivers/net/wireless/bcmdhd/src/shared/siutils.c	2017-01-08 17:44:24.019783914 -0800
+@@ -533,7 +533,11 @@
+ 	}
+ 
+ 	sih->bustype = bustype;
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wtautological-compare"
++/*FIXME: given GCC's warning this might really be too silly a check...*/
+ 	if (bustype != BUSTYPE(bustype)) {
++#pragma GCC diagnostic pop
+ 		SI_ERROR(("si_doattach: bus type %d does not match configured bus type %d\n",
+ 			bustype, BUSTYPE(bustype)));
+ 		return NULL;
+diff -ur kernel/msm-3.18.orig/fs/sdcardfs/packagelist.c kernel/msm-3.18/fs/sdcardfs/packagelist.c
+--- kernel/msm-3.18.orig/fs/sdcardfs/packagelist.c	2016-09-17 01:59:49.000000000 -0700
++++ kernel/msm-3.18/fs/sdcardfs/packagelist.c	2017-01-08 17:27:01.239854298 -0800
+@@ -184,7 +184,11 @@
+ /* Path to system-provided mapping of package name to appIds */
+ static const char* const kpackageslist_file = "/data/system/packages.list";
+ /* Supplementary groups to execute with */
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-const-variable"
++/*does this get stored into the object file and used later, or should this be removed???*/
+ static const gid_t kgroups[1] = { AID_PACKAGE_INFO };
++#pragma GCC diagnostic pop
+ 
+ static unsigned int str_hash(void *key) {
+ 	int i;

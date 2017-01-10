@@ -1,0 +1,35 @@
+diff -ur kernel/msm-3.18.orig/drivers/net/ethernet/msm/rndis_ipa_trace.h kernel/msm-3.18/drivers/net/ethernet/msm/rndis_ipa_trace.h
+--- kernel/msm-3.18.orig/drivers/net/ethernet/msm/rndis_ipa_trace.h	2016-09-17 01:59:47.000000000 -0700
++++ kernel/msm-3.18/drivers/net/ethernet/msm/rndis_ipa_trace.h	2017-01-08 11:57:32.751169393 -0800
+@@ -77,5 +77,6 @@
+ 
+ /* This part must be outside protection */
+ #undef TRACE_INCLUDE_PATH
+-#define TRACE_INCLUDE_PATH .
++//#define TRACE_INCLUDE_PATH .
++#define TRACE_INCLUDE_PATH ../../drivers/net/ethernet/msm
+ #include <trace/define_trace.h>
+diff -ur kernel/msm-3.18.orig/drivers/platform/msm/ipa/ipa_v2/ipa_trace.h kernel/msm-3.18/drivers/platform/msm/ipa/ipa_v2/ipa_trace.h
+--- kernel/msm-3.18.orig/drivers/platform/msm/ipa/ipa_v2/ipa_trace.h	2016-09-17 01:59:48.000000000 -0700
++++ kernel/msm-3.18/drivers/platform/msm/ipa/ipa_v2/ipa_trace.h	2017-01-08 11:57:32.751169393 -0800
+@@ -131,5 +131,6 @@
+ 
+ /* This part must be outside protection */
+ #undef TRACE_INCLUDE_PATH
+-#define TRACE_INCLUDE_PATH .
++//#define TRACE_INCLUDE_PATH .
++#define TRACE_INCLUDE_PATH ../../drivers/platform/msm/ipa/ipa_v2
+ #include <trace/define_trace.h>
+diff -ur kernel/msm-3.18.orig/drivers/soc/qcom/tracer_pkt_private.h kernel/msm-3.18/drivers/soc/qcom/tracer_pkt_private.h
+--- kernel/msm-3.18.orig/drivers/soc/qcom/tracer_pkt_private.h	2016-09-17 01:59:48.000000000 -0700
++++ kernel/msm-3.18/drivers/soc/qcom/tracer_pkt_private.h	2017-01-08 17:54:45.990160646 -0800
+@@ -15,7 +15,8 @@
+ #undef TRACE_SYSTEM
+ #define TRACE_SYSTEM tracer_pkt
+ #undef TRACE_INCLUDE_PATH
+-#define TRACE_INCLUDE_PATH .
++//#define TRACE_INCLUDE_PATH .
++#define TRACE_INCLUDE_PATH ../drivers/soc/qcom
+ #undef TRACE_INCLUDE_FILE
+ #define TRACE_INCLUDE_FILE tracer_pkt_private
+ 
