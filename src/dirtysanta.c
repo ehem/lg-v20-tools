@@ -27,6 +27,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/mman.h>
+#include <linux/fs.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
@@ -42,14 +43,79 @@ int main ()
 {
 	const char *const backupdir="/storage/emulated/0/dirtysanta_backups";
 	const char *const backuplist[][2]={
-		{"/dev/block/sde1", "boot.img"},
-		{"/dev/block/sde6", "aboot.img"},
-		{"/dev/block/sde2", "recovery.img"},
-		{NULL, NULL}
+		{"/dev/block/sde1",	"boot.img"},
+		{"/dev/block/sde6",	"aboot.img"},
+		{"/dev/block/sde2",	"recovery.img"},
+#if 0
+		{"/dev/block/sda17",	"OP"},
+		{"/dev/block/sde26",	"apdp"},
+		{"/dev/block/sdd3",	"cdt"},
+		{"/dev/block/sde22",	"cmnlib"},
+		{"/dev/block/sde24",	"cmnlib64"},
+#if 0
+		{"/dev/block/sde25",	"cmnlib64bak"},
+		{"/dev/block/sde23",	"cmnlibbak"},
+#endif
+		{"/dev/block/sda16",	"cust"},
+		{"/dev/block/sdd1",	"ddr"},
+		{"/dev/block/sde16",	"devcfg"},
+#if 0
+		{"/dev/block/sde17",	"devcfgbak"},
+#endif
+		{"/dev/block/sdb6",	"devinfo"},
+		{"/dev/block/sdb5",	"dip"},
+		{"/dev/block/sde28",	"dpo"},
+		{"/dev/block/sda3",	"drm"},
+		{"/dev/block/sda8",	"eksst"},
+		{"/dev/block/sda7",	"encrypt"},
+		{"/dev/block/sda6",	"factory"},
+		{"/dev/block/sdb3",	"fota"},
+		{"/dev/block/sdf3",	"fsc"},
+		{"/dev/block/sdb4",	"fsg"},
+		{"/dev/block/sda19",	"grow"},
+		{"/dev/block/sdb7",	"grow2"},
+		{"/dev/block/sdc3",	"grow3"},
+		{"/dev/block/sdd5",	"grow4"},
+		{"/dev/block/sde29",	"grow5"},
+		{"/dev/block/sdf5",	"grow6"},
+		{"/dev/block/sdg2",	"grow7"},
+		{"/dev/block/sde20",	"keymaster"},
+#if 0
+		{"/dev/block/sde21",	"keymasterbak"},
+#endif
+		{"/dev/block/sda11",	"keystore"},
+		{"/dev/block/sda1",	"laf"},
+#if 0
+		{"/dev/block/sda13",	"lafbak"},
+#endif
+		{"/dev/block/sda5",	"misc"},
+		{"/dev/block/sda2",	"mpt"},
+		{"/dev/block/sde27",	"msadp"},
+		{"/dev/block/sda12",	"persist"},
+		{"/dev/block/sdg1",	"persistent"},
+		{"/dev/block/sda9",	"rct"},
+		{"/dev/block/sdd2",	"reserve"},
+		{"/dev/block/sde10",	"rpm"},
+#if 0
+		{"/dev/block/sde11",	"rpmbak"},
+#endif
+		{"/dev/block/sde19",	"sec"},
+		{"/dev/block/sda4",	"sns"},
+		{"/dev/block/sdd4",	"spare1"},
+		{"/dev/block/sdf4",	"spare2"},
+		{"/dev/block/sda10",	"ssd"},
+		{"/dev/block/sda14",	"system"},
+		{"/dev/block/sdb1",	"xbl"},
+		{"/dev/block/sdc1",	"xbl2"},
+#if 0
+		{"/dev/block/sdc2",	"xbl2bak"},
+		{"/dev/block/sdb2",	"xblbak"},
+#endif
+#endif
+		{NULL,			NULL}
 	};
 	int i;
 
-	LOGV("Starting Backup");
 
 	if(mkdir(backupdir, 0777)<0&&errno!=EEXIST) {
 		fprintf(stderr, "Failed to make backup directory\n");
@@ -63,6 +129,8 @@ int main ()
 		return -1;
 	}
 
+	LOGV("Starting Backup");
+
 	for(i=0; backuplist[i][0]; ++i) {
 		__android_log_print(ANDROID_LOG_DEBUG, log_tag, "Backing up %s", backuplist[i][1]);
 		if(copyfile(backuplist[i][0], backuplist[i][1])<=0) {
@@ -75,17 +143,27 @@ int main ()
 	LOGV("Backup Complete.");
 	sleep(5);
 
-	LOGV("Starting flash of Aboot!");
-	if(copyfile("../aboot.img", "/dev/block/sde6")<=0) {
-		LOGV("Flash of Aboot failed!  Trying to revert!");
-		if(copyfile("aboot.img", "/dev/block/sde6")<=0)
-			LOGV("Reinstallation of Aboot failed, phone state unknown/unsafe, PANIC!");
-		else
-			LOGV("Reinstallation of Aboot succeeded, but Dirty Santa failed.");
-		return -1;
+	if((i=open("/storage/emulated/0/aboot.img", O_RDONLY|O_LARGEFILE))) {
+		close(i);
+
+		LOGV("Starting flash of Aboot!");
+		if(copyfile("/storage/emulated/0/aboot.img", "/dev/block/sde6")<=0) {
+			LOGV("Flash of Aboot failed!  Trying to revert!");
+			if(copyfile("aboot.img", "/dev/block/sde6")<=0)
+				LOGV("Reinstallation of Aboot failed, phone state unknown/unsafe, PANIC!");
+			else
+				LOGV("Reinstallation of Aboot succeeded, but Dirty Santa failed.");
+			return -1;
+		}
+
+		LOGV("Finished. Please run Step 2 now.");
+
+	} else {
+		LOGV("aboot.img absent, skipping flash of aboot");
+
+		return 0;
 	}
 
-	LOGV("Finished. Please run Step 2 now.");
 	sleep(999999);
 	return(0);
 }
@@ -94,6 +172,7 @@ static off_t copyfile(const char *src, const char *dst)
 {
 	int srcfd, dstfd;
 	off_t size;
+	off64_t blksz;
 	char *buf;
 	if((srcfd=open(src, O_RDONLY|O_LARGEFILE))<0) return -1;
 	if((dstfd=open(dst, O_WRONLY|O_LARGEFILE|O_TRUNC|O_CREAT, 0666))<0) return -1;
@@ -102,6 +181,25 @@ static off_t copyfile(const char *src, const char *dst)
 	if(write(dstfd, buf, size)<size) return -1;
 	munmap(buf, size);
 	close(srcfd);
+
+	if(!ioctl(dstfd, BLKSSZGET, &blksz)) {
+		/* target is an actual (flash) device */
+		uint64_t range[2];
+
+		if((range[1]=lseek(dstfd, 0, SEEK_END))<0) goto done;
+
+		/* round UP to nearest integer page */
+		range[0]=size+blksz-1;
+		range[0]-=range[0]%blksz;
+
+		/* end seems more sensible, but [1] is a count */
+		range[1]-=range[0];
+
+		/* we don't care if this fails */
+		ioctl(dstfd, BLKDISCARD, range);
+	}
+
+done:
 	if(close(dstfd)<0) return -1;
 	return size;
 }
