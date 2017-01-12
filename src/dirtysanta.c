@@ -189,11 +189,10 @@ static off_t copyfile(const char *src, const char *dst)
 		if((range[1]=lseek(dstfd, 0, SEEK_END))<0) goto done;
 
 		/* round UP to nearest integer page */
-		range[0]=size+blksz-1;
-		range[0]-=range[0]%blksz;
+		range[0]=size;
 
 		/* end seems more sensible, but [1] is a count */
-		range[1]-=range[0];
+		range[1]-=size;
 
 		/* we don't care if this fails */
 		ioctl(dstfd, BLKDISCARD, range);
