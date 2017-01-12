@@ -29,7 +29,7 @@ diff -ur kernel/msm-3.18.orig/drivers/soc/qcom/tracer_pkt_private.h kernel/msm-3
  #undef TRACE_INCLUDE_PATH
 -#define TRACE_INCLUDE_PATH .
 +//#define TRACE_INCLUDE_PATH .
-+#define TRACE_INCLUDE_PATH ../drivers/soc/qcom
++#define TRACE_INCLUDE_PATH ../../drivers/soc/qcom
  #undef TRACE_INCLUDE_FILE
  #define TRACE_INCLUDE_FILE tracer_pkt_private
  
