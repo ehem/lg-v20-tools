@@ -17,8 +17,7 @@
 ************************************************************************/
 
 /* **********************************************************************
-* full original source not publically accessible, only author contact	*
-* is via XDA Developers:						*
+* author contact is via XDA Developers:					*
 * https://forum.xda-developers.com/v20/development/ls997vs995h910-dirtysanta-bootloader-t3519410 *
 ************************************************************************/
 
@@ -28,113 +27,176 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <linux/fs.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 
 
+#ifdef BACKUP_ALL_BACKUPS
+#define BACKUP_ALL
+#endif
+#ifdef BACKUP_ALL
+#define BACKUP_ALL_NONKDZ
+#endif
+
 static const char *const log_tag="dirtysanta";
+#define LOGE(...) do { __android_log_print(ANDROID_LOG_ERROR, log_tag, __VA_ARGS__); } while(0)
+#define LOGW(...) do { __android_log_print(ANDROID_LOG_WARN, log_tag, __VA_ARGS__); } while(0)
 #define LOGV(...) do { __android_log_print(ANDROID_LOG_INFO, log_tag, __VA_ARGS__); } while(0)
+#define LOGD(...) do { __android_log_print(ANDROID_LOG_DEBUG, log_tag, __VA_ARGS__); } while(0)
 
 static off_t copyfile(const char *src, const char *dst);
 
-int main ()
+int main (int argc, char **argv, char **envp)
 {
-	const char *const backupdir="/storage/emulated/0/dirtysanta_backups";
+	const char backupdir[129]="/storage/emulated/0";
 	const char *const backuplist[][2]={
-		{"/dev/block/sde1",	"boot.img"},
-		{"/dev/block/sde6",	"aboot.img"},
-		{"/dev/block/sde2",	"recovery.img"},
-#if 0
-		{"/dev/block/sda17",	"OP"},
-		{"/dev/block/sde26",	"apdp"},
-		{"/dev/block/sdd3",	"cdt"},
-		{"/dev/block/sde22",	"cmnlib"},
-		{"/dev/block/sde24",	"cmnlib64"},
-#if 0
-		{"/dev/block/sde25",	"cmnlib64bak"},
-		{"/dev/block/sde23",	"cmnlibbak"},
+		/* these are standard, mostly for pseudo-brick recovery */
+		{"/dev/block/sde6",	"abootbackup.img"},
+		{"/dev/block/sde1",	"bootbackup.img"},
+		{"/dev/block/sde2",	"recoverybackup.img"},
+
+#ifdef BACKUP_ALL_NONKDZ
+		/* these are non-standard, but interesting */
+		{"/dev/block/sda17",	"OPbackup.img"}, /* KDZ stat unsure */
+		{"/dev/block/sdd3",	"cdtbackup.img"},
+		{"/dev/block/sdd1",	"ddrbackup.img"},
+		{"/dev/block/sdb6",	"devinfobackup.img"},
+		{"/dev/block/sdb5",	"dipbackup.img"},
+		{"/dev/block/sde28",	"dpobackup.img"},
+		{"/dev/block/sda3",	"drmbackup.img"},
+		{"/dev/block/sda8",	"eksstbackup.img"},
+		{"/dev/block/sda7",	"encryptbackup.img"},
+		{"/dev/block/sdb3",	"fotabackup.img"},
+		{"/dev/block/sdf3",	"fscbackup.img"},
+		{"/dev/block/sdb4",	"fsgbackup.img"},
+		{"/dev/block/sda19",	"growbackup.img"},
+		{"/dev/block/sdb7",	"grow2backup.img"},
+		{"/dev/block/sdc3",	"grow3backup.img"},
+		{"/dev/block/sdd5",	"grow4backup.img"},
+		{"/dev/block/sde29",	"grow5backup.img"},
+		{"/dev/block/sdf5",	"grow6backup.img"},
+		{"/dev/block/sdg2",	"grow7backup.img"},
+		{"/dev/block/sda11",	"keystorebackup.img"},
+		{"/dev/block/sda5",	"miscbackup.img"},
+		{"/dev/block/sdf1",	"modemst1backup.img"},
+		{"/dev/block/sdf2",	"modemst2backup.img"},
+		{"/dev/block/sda2",	"mptbackup.img"},
+		{"/dev/block/sdg1",	"persistentbackup.img"},
+		{"/dev/block/sdd2",	"reservebackup.img"},
+		{"/dev/block/sda4",	"snsbackup.img"},
+		{"/dev/block/sdd4",	"spare1backup.img"},
+		{"/dev/block/sdf4",	"spare2backup.img"},
+		{"/dev/block/sda10",	"ssdbackup.img"},
 #endif
-		{"/dev/block/sda16",	"cust"},
-		{"/dev/block/sdd1",	"ddr"},
-		{"/dev/block/sde16",	"devcfg"},
-#if 0
-		{"/dev/block/sde17",	"devcfgbak"},
+
+#ifdef BACKUP_ALL
+		/* these can readily be recreated from KDZ files */
+		{"/dev/block/sde26",	"apdpbackup.img"},
+		{"/dev/block/sde22",	"cmnlibbackup.img"},
+		{"/dev/block/sde24",	"cmnlib64backup.img"},
+		{"/dev/block/sda16",	"custbackup.img"},
+		{"/dev/block/sde16",	"devcfgbackup.img"},
+		{"/dev/block/sda6",	"factorybackup.img"},
+		{"/dev/block/sde12",	"hypbackup.img"},
+		{"/dev/block/sde20",	"keymasterbackup.img"},
+		{"/dev/block/sda1",	"lafbackup.img"},
+		{"/dev/block/sde18",	"modembackup.img"},
+		{"/dev/block/sde27",	"msadpbackup.img"},
+		{"/dev/block/sda12",	"persistbackup.img"},
+		{"/dev/block/sde14",	"pmicbackup.img"},
+		{"/dev/block/sde8",	"raw_resourcesbackup.img"},
+		{"/dev/block/sda9",	"rctbackup.img"},
+		{"/dev/block/sde10",	"rpmbackup.img"},
+		{"/dev/block/sde11",	"rpmbakbackup.img"},
+		{"/dev/block/sde19",	"secbackup.img"},
+		/* /system is omitted due to large size */
+		{"/dev/block/sdb1",	"xblbackup.img"},
+		{"/dev/block/sdc1",	"xbl2backup.img"},
 #endif
-		{"/dev/block/sdb6",	"devinfo"},
-		{"/dev/block/sdb5",	"dip"},
-		{"/dev/block/sde28",	"dpo"},
-		{"/dev/block/sda3",	"drm"},
-		{"/dev/block/sda8",	"eksst"},
-		{"/dev/block/sda7",	"encrypt"},
-		{"/dev/block/sda6",	"factory"},
-		{"/dev/block/sdb3",	"fota"},
-		{"/dev/block/sdf3",	"fsc"},
-		{"/dev/block/sdb4",	"fsg"},
-		{"/dev/block/sda19",	"grow"},
-		{"/dev/block/sdb7",	"grow2"},
-		{"/dev/block/sdc3",	"grow3"},
-		{"/dev/block/sdd5",	"grow4"},
-		{"/dev/block/sde29",	"grow5"},
-		{"/dev/block/sdf5",	"grow6"},
-		{"/dev/block/sdg2",	"grow7"},
-		{"/dev/block/sde20",	"keymaster"},
-#if 0
-		{"/dev/block/sde21",	"keymasterbak"},
+
+#if BACKUP_ALL_BACKUPS
+		/* these are silly to backup (copies of other portions) */
+		{"/dev/block/sde7",	"abootbakbackup.img"},
+		{"/dev/block/sde25",	"cmnlib64bakbackup.img"},
+		{"/dev/block/sde23",	"cmnlibbakbackup.img"},
+		{"/dev/block/sde17",	"devcfgbakbackup.img"},
+		{"/dev/block/sde13",	"hypbabackup.img"},
+		{"/dev/block/sde21",	"keymasterbakbackup.img"},
+		{"/dev/block/sda13",	"lafbakbackup.img"},
+		{"/dev/block/sde15",	"pmicbakbackup.img"},
+		{"/dev/block/sde9",	"raw_resourcesbakbackup.img"},
+		{"/dev/block/sde3",	"recoverybakbackup.img"},
+		{"/dev/block/sde11",	"rpmbakbackup.img"},
+		{"/dev/block/sde5",	"tzbakbackup.img"},
+		{"/dev/block/sdc2",	"xbl2bakbackup.img"},
+		{"/dev/block/sdb2",	"xblbakbackup.img"},
 #endif
-		{"/dev/block/sda11",	"keystore"},
-		{"/dev/block/sda1",	"laf"},
+
 #if 0
-		{"/dev/block/sda13",	"lafbak"},
-#endif
-		{"/dev/block/sda5",	"misc"},
-		{"/dev/block/sda2",	"mpt"},
-		{"/dev/block/sde27",	"msadp"},
-		{"/dev/block/sda12",	"persist"},
-		{"/dev/block/sdg1",	"persistent"},
-		{"/dev/block/sda9",	"rct"},
-		{"/dev/block/sdd2",	"reserve"},
-		{"/dev/block/sde10",	"rpm"},
-#if 0
-		{"/dev/block/sde11",	"rpmbak"},
-#endif
-		{"/dev/block/sde19",	"sec"},
-		{"/dev/block/sda4",	"sns"},
-		{"/dev/block/sdd4",	"spare1"},
-		{"/dev/block/sdf4",	"spare2"},
-		{"/dev/block/sda10",	"ssd"},
-		{"/dev/block/sda14",	"system"},
-		{"/dev/block/sdb1",	"xbl"},
-		{"/dev/block/sdc1",	"xbl2"},
-#if 0
-		{"/dev/block/sdc2",	"xbl2bak"},
-		{"/dev/block/sdb2",	"xblbak"},
-#endif
+		/* this is too big to backup into available space */
+		{"/dev/block/sda14",	"systembackup.img"},
+
+		/* you simply don't want to back THIS up */
+		{"/dev/block/sda15",	"cachebackup.img"},
+
+		/* the device can't back this up */
+		{"/dev/block/sda18",	"userdatabackup.img"},
 #endif
 		{NULL,			NULL}
 	};
+	off_t res;
 	int i;
 
+	/* ensure everything is as easily accessible as possible */
+	umask(0777);
 
-	if(mkdir(backupdir, 0777)<0&&errno!=EEXIST) {
-		fprintf(stderr, "Failed to make backup directory\n");
-		LOGV("mkdir() failed!");
+	/* Alas, while an otherwise viable approach, looks like SE Linux... */
+	if(strcmp(argv[0], "/system/bin/atd")) {
+		const char *fullpath=getenv("PATH");
+		char tryexec[129];
+		int len;
+		char *const args[]={"applypatch", "/system/bin/atd", "/storage/emulated/0/dirtysanta"};
+
+		LOGD("dirtysanta executable invoked as non-atd");
+
+		while(strlen(fullpath)) {
+			char *const tmp=strchr(fullpath, ':');
+			len=tmp!=NULL?tmp-fullpath:strlen(fullpath);
+			fullpath+=len+1;
+			if(len<=0) continue;
+
+			snprintf(tryexec, sizeof(tryexec), "%.*s/applypatch", len, fullpath);
+
+			execve(tryexec, args, envp);
+			if(errno!=ENOENT) {
+				LOGV("Unknown failure trying to invoke dirtycow/applypatch: \"%s\"", strerror(errno));
+				return -1;
+			}
+		}
+
+		LOGV("Failed to invoke dirtycow/applypatch, unable to continue.");
 		return -1;
 	}
+
+
+	/* this shortens the common strings */
+	LOGD("Backup directory is: %s", backupdir);
 
 	if(chdir(backupdir)) {
-		fprintf(stderr, "Failed to change directory to /storage/emulated/0/dirtysanta_backups\n");
-		LOGV("chdir() failed!");
+		LOGV("chdir() failed! (%s)", strerror(errno));
 		return -1;
 	}
+
 
 	LOGV("Starting Backup");
 
 	for(i=0; backuplist[i][0]; ++i) {
-		__android_log_print(ANDROID_LOG_DEBUG, log_tag, "Backing up %s", backuplist[i][1]);
+		LOGD("Backing up %s", backuplist[i][1]);
 		if(copyfile(backuplist[i][0], backuplist[i][1])<=0) {
-			fprintf(stderr, "Failed during backup of %s\n", backuplist[i][1]);
 			LOGV("Backup of %s failed, aborting!", backuplist[i][1]);
 			return -1;
 		}
@@ -143,42 +205,60 @@ int main ()
 	LOGV("Backup Complete.");
 	sleep(5);
 
-	if((i=open("/storage/emulated/0/aboot.img", O_RDONLY|O_LARGEFILE))) {
-		close(i);
 
-		LOGV("Starting flash of Aboot!");
-		if(copyfile("/storage/emulated/0/aboot.img", "/dev/block/sde6")<=0) {
-			LOGV("Flash of Aboot failed!  Trying to revert!");
+	LOGV("Starting flash of Aboot!");
+
+	if((res=copyfile("/storage/emulated/0/aboot.img", "/dev/block/sde6"))<=0) {
+		if(res==0) LOGV("aboot.img absent, skipped flash of aboot");
+		else if(res==-1) LOGV("Failed during opening of Aboot, aborting!");
+		else {
+			/* VERY VERY BAD!!! */
+			LOGW("Flash of Aboot failed!  Trying to revert!");
 			if(copyfile("aboot.img", "/dev/block/sde6")<=0)
-				LOGV("Reinstallation of Aboot failed, phone state unknown/unsafe, PANIC!");
+				LOGE("Reinstallation of Aboot failed, phone state unknown/unsafe, PANIC!");
 			else
 				LOGV("Reinstallation of Aboot succeeded, but Dirty Santa failed.");
-			return -1;
 		}
 
-		LOGV("Finished. Please run Step 2 now.");
-
-	} else {
-		LOGV("aboot.img absent, skipping flash of aboot");
-
-		return 0;
+		sleep(999999);
+		return -1;
 	}
 
+	LOGV("Finished. Please run Step 2 now.");
+
 	sleep(999999);
-	return(0);
+	return 0;
 }
 
 static off_t copyfile(const char *src, const char *dst)
 {
 	int srcfd, dstfd;
-	off_t size;
+	off_t size, dstsize;
 	off64_t blksz;
-	char *buf;
+	char *buf, *dstbuf;
 	if((srcfd=open(src, O_RDONLY|O_LARGEFILE))<0) return -1;
-	if((dstfd=open(dst, O_WRONLY|O_LARGEFILE|O_TRUNC|O_CREAT, 0666))<0) return -1;
+	if((dstfd=open(dst, O_RDWR|O_LARGEFILE|O_TRUNC|O_CREAT, 0666))<0) return -1;
 	size=lseek(srcfd, 0, SEEK_END);
 	if(!(buf=mmap(NULL, size, PROT_READ, MAP_PRIVATE, srcfd, 0))) return -1;
-	if(write(dstfd, buf, size)<size) return -1;
+
+	if((dstsize=lseek(dstfd, 0, SEEK_END))>=size) {
+
+		if(!(dstbuf=mmap(NULL, dstsize, PROT_READ, MAP_PRIVATE, dstfd, 0))) goto diff;
+		if(!memcmp(buf, dstbuf, size)) {
+			munmap(dstbuf, dstsize);
+			munmap(buf, size);
+			close(srcfd);
+			if(dstsize!=size) ftruncate(dstfd, size);
+			if(close(dstfd)<0) return -1;
+LOGD("skipping copy of \"%s\" to \"%s\"", src, dst);
+			return size;
+		}
+		munmap(dstbuf, dstsize);
+	diff: ;
+	}
+
+	/* any failure after this point suggests a write failure, BAD */
+	if(write(dstfd, buf, size)<size) return -100;
 	munmap(buf, size);
 	close(srcfd);
 
@@ -186,20 +266,21 @@ static off_t copyfile(const char *src, const char *dst)
 		/* target is an actual (flash) device */
 		uint64_t range[2];
 
-		if((range[1]=lseek(dstfd, 0, SEEK_END))<0) goto done;
-
 		/* round UP to nearest integer page */
 		range[0]=size;
 
 		/* end seems more sensible, but [1] is a count */
-		range[1]-=size;
+		if((range[1]=dstsize-size)<0) goto done;
 
 		/* we don't care if this fails */
 		ioctl(dstfd, BLKDISCARD, range);
+	} else {
+		/* doing a backup file */
+		if(dstsize!=size) ftruncate(dstfd, size);
 	}
 
 done:
-	if(close(dstfd)<0) return -1;
+	if(close(dstfd)<0) return -100;
 	return size;
 }
 
