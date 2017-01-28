@@ -48,9 +48,89 @@ static const char *const log_tag="dirtysanta";
 #define LOGV(...) do { __android_log_print(ANDROID_LOG_INFO, log_tag, __VA_ARGS__); } while(0)
 #define LOGD(...) do { __android_log_print(ANDROID_LOG_DEBUG, log_tag, __VA_ARGS__); } while(0)
 
+static void tryexec(int argc, char **argv, char **envp);
+
+static void dobackups();
+
 static off_t copyfile(const char *src, const char *dst);
 
-int main (int argc, char **argv, char **envp)
+
+int main(int argc, char **argv, char **envp)
+{
+	off_t res;
+
+	/* ensure everything is as easily accessible as possible */
+	umask(0777);
+
+	/* Alas, while an otherwise viable approach, looks like SE Linux... */
+	/* this will exit() on failure */
+	tryexec(argc, argv, envp);
+
+	/* backup the crucial slices */
+	dobackups();
+
+	/* now things get interesting */
+	sleep(5);
+
+	LOGV("Starting flash of Aboot!");
+
+	if((res=copyfile("/storage/emulated/0/aboot.img", "/dev/block/sde6"))<=0) {
+		if(res==0) LOGV("aboot.img absent, skipped flash of aboot");
+		else if(res==-1) LOGV("Failed during opening of Aboot, aborting!");
+		else {
+			/* VERY VERY BAD!!! */
+			LOGW("Flash of Aboot failed!  Trying to revert!");
+			if(copyfile("aboot.img", "/dev/block/sde6")<=0)
+				LOGE("Reinstallation of Aboot failed, phone state unknown/unsafe, PANIC!");
+			else
+				LOGV("Reinstallation of Aboot succeeded, but Dirty Santa failed.");
+		}
+
+		sleep(999999);
+		return -1;
+	}
+
+	LOGV("Finished. Please run Step 2 now.");
+
+	sleep(999999);
+	return 0;
+}
+
+
+static void tryexec(int argc, char **argv, char **envp)
+{
+	const char *fullpath=getenv("PATH");
+	char command[129];
+	int len;
+	char *const args[]={"applypatch", "/system/bin/atd", "/storage/emulated/0/dirtysanta"};
+
+	/* We're already in the right position, simply continue the process */
+	if(!strcmp(argv[0], "/system/bin/atd")) return;
+
+	/* Alas, while an otherwise viable approach, looks like SE Linux... */
+	LOGD("dirtysanta executable invoked as non-atd");
+
+	while(strlen(fullpath)) {
+		char *const tmp=strchr(fullpath, ':');
+		len=tmp!=NULL?tmp-fullpath:strlen(fullpath);
+		fullpath+=len+1;
+		if(len<=0) continue;
+
+		snprintf(command, sizeof(command), "%.*s/applypatch", len, fullpath);
+
+		execve(command, args, envp);
+		if(errno!=ENOENT) {
+			LOGV("Unknown failure trying to invoke dirtycow/applypatch: \"%s\"", strerror(errno));
+			exit(1);
+		}
+	}
+
+	LOGV("Failed to invoke dirtycow/applypatch, unable to continue.");
+	exit(1);
+}
+
+
+static void dobackups()
 {
 	const char backupdir[129]="/storage/emulated/0";
 	const char *const backuplist[][2]={
@@ -148,47 +228,17 @@ int main (int argc, char **argv, char **envp)
 #endif
 		{NULL,			NULL}
 	};
-	off_t res;
 	int i;
 
 	/* ensure everything is as easily accessible as possible */
 	umask(0777);
-
-	/* Alas, while an otherwise viable approach, looks like SE Linux... */
-	if(strcmp(argv[0], "/system/bin/atd")) {
-		const char *fullpath=getenv("PATH");
-		char tryexec[129];
-		int len;
-		char *const args[]={"applypatch", "/system/bin/atd", "/storage/emulated/0/dirtysanta"};
-
-		LOGD("dirtysanta executable invoked as non-atd");
-
-		while(strlen(fullpath)) {
-			char *const tmp=strchr(fullpath, ':');
-			len=tmp!=NULL?tmp-fullpath:strlen(fullpath);
-			fullpath+=len+1;
-			if(len<=0) continue;
-
-			snprintf(tryexec, sizeof(tryexec), "%.*s/applypatch", len, fullpath);
-
-			execve(tryexec, args, envp);
-			if(errno!=ENOENT) {
-				LOGV("Unknown failure trying to invoke dirtycow/applypatch: \"%s\"", strerror(errno));
-				return -1;
-			}
-		}
-
-		LOGV("Failed to invoke dirtycow/applypatch, unable to continue.");
-		return -1;
-	}
-
 
 	/* this shortens the common strings */
 	LOGD("Backup directory is: %s", backupdir);
 
 	if(chdir(backupdir)) {
 		LOGV("chdir() failed! (%s)", strerror(errno));
-		return -1;
+		exit(1);
 	}
 
 
@@ -198,37 +248,13 @@ int main (int argc, char **argv, char **envp)
 		LOGD("Backing up %s", backuplist[i][1]);
 		if(copyfile(backuplist[i][0], backuplist[i][1])<=0) {
 			LOGV("Backup of %s failed, aborting!", backuplist[i][1]);
-			return -1;
+			exit(1);
 		}
 	}
 
 	LOGV("Backup Complete.");
-	sleep(5);
-
-
-	LOGV("Starting flash of Aboot!");
-
-	if((res=copyfile("/storage/emulated/0/aboot.img", "/dev/block/sde6"))<=0) {
-		if(res==0) LOGV("aboot.img absent, skipped flash of aboot");
-		else if(res==-1) LOGV("Failed during opening of Aboot, aborting!");
-		else {
-			/* VERY VERY BAD!!! */
-			LOGW("Flash of Aboot failed!  Trying to revert!");
-			if(copyfile("aboot.img", "/dev/block/sde6")<=0)
-				LOGE("Reinstallation of Aboot failed, phone state unknown/unsafe, PANIC!");
-			else
-				LOGV("Reinstallation of Aboot succeeded, but Dirty Santa failed.");
-		}
-
-		sleep(999999);
-		return -1;
-	}
-
-	LOGV("Finished. Please run Step 2 now.");
-
-	sleep(999999);
-	return 0;
 }
+
 
 static off_t copyfile(const char *src, const char *dst)
 {
@@ -236,29 +262,42 @@ static off_t copyfile(const char *src, const char *dst)
 	off_t size, dstsize;
 	off64_t blksz;
 	char *buf, *dstbuf;
+	ssize_t count;
+
 	if((srcfd=open(src, O_RDONLY|O_LARGEFILE))<0) return -1;
-	if((dstfd=open(dst, O_RDWR|O_LARGEFILE|O_TRUNC|O_CREAT, 0666))<0) return -1;
+	if((dstfd=open(dst, O_RDWR|O_LARGEFILE|O_CREAT, 0666))<0) return -1;
 	size=lseek(srcfd, 0, SEEK_END);
-	if(!(buf=mmap(NULL, size, PROT_READ, MAP_PRIVATE, srcfd, 0))) return -1;
+	if((buf=mmap(NULL, size, PROT_READ, MAP_PRIVATE, srcfd, 0))==MAP_FAILED) return -1;
 
 	if((dstsize=lseek(dstfd, 0, SEEK_END))>=size) {
 
-		if(!(dstbuf=mmap(NULL, dstsize, PROT_READ, MAP_PRIVATE, dstfd, 0))) goto diff;
+		if((dstbuf=mmap(NULL, dstsize, PROT_READ, MAP_PRIVATE, dstfd, 0))==MAP_FAILED) goto diff;
 		if(!memcmp(buf, dstbuf, size)) {
 			munmap(dstbuf, dstsize);
 			munmap(buf, size);
 			close(srcfd);
 			if(dstsize!=size) ftruncate(dstfd, size);
 			if(close(dstfd)<0) return -1;
-LOGD("skipping copy of \"%s\" to \"%s\"", src, dst);
+
+			LOGD("Skipping copy of \"%s\" to \"%s\", already identical", src, dst);
+
 			return size;
 		}
 		munmap(dstbuf, dstsize);
 	diff: ;
 	}
 
+	if(lseek(dstfd, 0, SEEK_SET)!=0) {
+		munmap(buf, size);
+		LOGV("copyfile(): lseek() to begining of %s failed?! error: %s", dst, strerror(errno));
+		return -1;
+	}
 	/* any failure after this point suggests a write failure, BAD */
-	if(write(dstfd, buf, size)<size) return -100;
+	if((count=write(dstfd, buf, size))<size) {
+		munmap(buf, size);
+		LOGW("copyfile(): Failed while write()ing \"%s\", returned %zd cause: %s", dst, count, strerror(errno));
+		return -100;
+	}
 	munmap(buf, size);
 	close(srcfd);
 
@@ -280,7 +319,10 @@ LOGD("skipping copy of \"%s\" to \"%s\"", src, dst);
 	}
 
 done:
-	if(close(dstfd)<0) return -100;
+	if((count=close(dstfd))<0) {
+		LOGW("copyfile(): Failed during close() \"%s\", returned %zd cause: %s", dst, count, strerror(errno));
+		return -100;
+	}
 	return size;
 }
 
