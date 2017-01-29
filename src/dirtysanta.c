@@ -309,16 +309,15 @@ static off_t copyfile(const char *src, const char *dst)
 		range[0]=size;
 
 		/* end seems more sensible, but [1] is a count */
-		if((range[1]=dstsize-size)<0) goto done;
+		range[1]=dstsize-size;
 
 		/* we don't care if this fails */
-		ioctl(dstfd, BLKDISCARD, range);
+		if(dstsize>size) ioctl(dstfd, BLKDISCARD, range);
 	} else {
 		/* doing a backup file */
 		if(dstsize!=size) ftruncate(dstfd, size);
 	}
 
-done:
 	if((count=close(dstfd))<0) {
 		LOGW("copyfile(): Failed during close() \"%s\", returned %zd cause: %s", dst, count, strerror(errno));
 		return -100;
