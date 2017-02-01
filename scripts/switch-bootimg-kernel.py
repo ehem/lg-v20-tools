@@ -26,8 +26,20 @@ import io
 
 
 # See Android's bootimg.h for detail about these
-BootImgHead = struct.Struct("<8sL24sL")
+BootImgHead = struct.Struct("<8sLLLLLLLLL")
 BootImgMagic = b"ANDROID!"
+
+# fields of note in the header
+MAGICNUM	= 0
+KERNELSZ	= 1
+KERNELADDR	= 2
+RAMDISKSZ	= 3
+RAMDISKADDR	= 4
+SECONDSZ	= 5
+SECONDADDR	= 6
+TAGSADDR	= 7
+PAGESIZE	= 8
+DTSIZE		= 9
 
 
 if __name__ == "__main__":
@@ -61,18 +73,18 @@ if __name__ == "__main__":
 
 	vals = BootImgHead.unpack(buf)
 
-	if vals[0] != BootImgMagic:
+	if vals[MAGICNUM] != BootImgMagic:
 		print("Magic string \"{:s}\" missing from \"{:s}\", damaged file?".format(BootImgMagic, bootimg.name))
 		sys.exit(1)
 
-	pagesize = vals[3]
-	oldsize = vals[1]
+	pagesize = vals[PAGESIZE]
+	oldsize = vals[KERNELSZ]
 
-	oldspace = (oldsize + pagesize - 1) / pagesize * pagesize
-	newspace = (newsize + pagesize - 1) / pagesize * pagesize
+	oldspace = (oldsize + pagesize - 1) // pagesize * pagesize
+	newspace = (newsize + pagesize - 1) // pagesize * pagesize
 
 	vals = list(vals)
-	vals[1] = newsize
+	vals[KERNELSZ] = newsize
 
 
 	if newspace > oldspace:
@@ -107,7 +119,17 @@ if __name__ == "__main__":
 			bootimg.seek(-delta-len(buf), io.SEEK_CUR)
 			bootimg.write(buf)
 			bootimg.seek(delta, io.SEEK_CUR)
-		bootimg.truncate(bootimg.seek(-delta, io.SEEK_END))
+
+
+	# figure out the total size of the actual image
+	totalsize  = (vals[RAMDISKSZ]	+ pagesize - 1) // pagesize
+	totalsize += (vals[SECONDSZ]	+ pagesize - 1) // pagesize
+	totalsize += (vals[DTSIZE]	+ pagesize - 1) // pagesize
+	totalsize *= pagesize
+	# header and the new kernel
+	totalsize += pagesize + newspace
+
+	bootimg.truncate(totalsize)
 
 
 	# finally write the new header
