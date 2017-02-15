@@ -23,6 +23,7 @@ import struct
 import argparse
 import sys
 import io
+from binascii import a2b_hex, b2a_hex
 
 import gzip
 import tempfile
@@ -43,6 +44,60 @@ SECONDADDR	= 6
 TAGSADDR	= 7
 PAGESIZE	= 8
 DTSIZE		= 9
+
+
+CPIOMagic = b"070701"
+CPIOHead = struct.Struct(">IIIIIIIIIIIII")
+
+# fields of note in the CPIO header
+CPIOINODE	= 0
+CPIOMODE	= 1
+CPIOUID		= 2
+CPIOGID		= 3
+CPIONLINK	= 4
+CPIOMTIME	= 5
+CPIOFILESZ	= 6
+CPIODEVMAJ	= 7
+CPIODEVMIN	= 8
+CPIORDEVMAJ	= 9
+CPIORDEVMIN	= 10
+CPIONAMESZ	= 11
+CPIOCHECK	= 12
+
+
+targets = {
+	# Modifications to filesystem table
+	'fstab.elsa': (
+		# Remove dm-verify from fstab, enable fsck (add "check"?)
+		(b"wait,verify",		b"wait"),
+		# Disables forced encryption (a Bad Thing(tm), really)
+		(b"wait,check,forceencrypt",	b"wait,check,encryptable"),
+	),
+}
+
+
+
+def cpiowrite(file, head, name, buf):
+	# set the length of the file
+	head[CPIOFILESZ] = len(buf)
+
+	file.write(CPIOMagic)
+	count = len(CPIOMagic)
+
+	head = b2a_hex(CPIOHead.pack(*head))
+	file.write(head)
+	count += len(head)
+
+	name = name.encode("utf8") + b'\x00'
+	file.write(name)
+	count += len(name)
+
+	file.write(b"\x00\x00\x00\x00"[:(4-(count&3))&3:])
+
+	file.write(buf)
+	count = len(buf)
+
+	file.write(b"\x00\x00\x00\x00"[:(4-(count&3))&3:])
 
 
 if __name__ == "__main__":
@@ -101,48 +156,60 @@ if __name__ == "__main__":
 	newfile = tempfile.TemporaryFile()
 	ramout = gzip.GzipFile(fileobj=newfile, mode="wb", compresslevel=9, mtime=0)
 
-	targets = [
-		[b"fstab.elsa",			b"fstab.elsa"],
-		[b"wait,verify",		b"wait"],
-		[b"wait,check,forceencrypt",	b"wait,check,encryptable"],
-	]
+	name = ""
 
+	while name != "TRAILER!!!":
+		magic = ramin.read(len(CPIOMagic))
+		count = 6
 
-	buf = ramin.read(pagesize)
-	next = ramin.read(pagesize)
+		if magic != CPIOMagic:
+			print("ERROR: Missing magic number in ramdisk image!", file=sys.stderr)
+			sys.exit(1)
 
-	buf += next[:40]
+		head = list(CPIOHead.unpack(a2b_hex(ramin.read(CPIOHead.size<<1))))
+		count += CPIOHead.size<<1
 
-	for target in targets:
-		target[1] = target[1].rjust(len(target[0]), b' ')
+		# names include an extra null
+		name = (ramin.read(head[CPIONAMESZ])[:-1]).decode("utf8")
+		count += head[CPIONAMESZ]
 
-		while not target[0] in buf:
-			ramout.write(buf[:pagesize])
-			buf = next
-			next = ramin.read(pagesize)
-			buf += next[:40]
-			if len(buf) <=40:
-				raise("Internal error!")
+		# Grab any padding
+		ramin.read((4-(count&3))&3)
 
-		idx = buf.find(target[0])
+		count = head[CPIOFILESZ]
+		buf = ramin.read(count)
 
-		buf = buf[:idx] + target[1] + buf[idx+len(target[0]):]
+		# Grab any padding
+		ramin.read((4-(count&3))&3)
 
-		if idx+len(target[0]) >= pagesize:
-			ramout.write(buf[:pagesize])
-			buf = next
-			next = ramin.read(pagesize)
-			buf += next[:40]
+		if name in targets:
+			if targets[name] == None:
+				# mark as done
+				del targets[name]
 
-			buf = target[1][pagesize-(idx+len(target[1])):] + buf[idx+len(target[0])-pagesize:]
+				# delete the file!
+				continue
 
-	ramout.write(buf[:pagesize])
-	buf = next
-	while buf:
-		ramout.write(buf)
-		buf = ramin.read(pagesize)
+			for target in targets[name]:
+				# used for adding lines
+				if target[0] == None:
+					buf += target[1]
+					continue
+				idx = buf.find(target[0])
+				buf = buf[:idx] + target[1] + buf[idx+len(target[0]):]
+
+			# mark as done
+			del targets[name]
+
+		cpiowrite(ramout, head, name, buf)
+
 
 	ramout.close()
+
+	if len(targets.keys()) != 0:
+		print("ERROR: one or more targetted files were missed!", file=sys.stderr)
+		sys.exit(1)
+
 
 	newsize = newfile.tell()
 	newfile.seek(0, io.SEEK_SET)
