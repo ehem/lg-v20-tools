@@ -78,7 +78,7 @@ strerror(errno));
 		dstsize=size;
 		ftruncate(dstfd, dstsize);
 	}
-	if((dstbuf=mmap(NULL, dstsize, PROT_READ, MAP_SHARED, dstfd, 0))==MAP_FAILED) {
+	if((dstbuf=mmap(NULL, dstsize, PROT_READ|PROT_WRITE, MAP_SHARED, dstfd, 0))==MAP_FAILED) {
 		fprintf(stderr, "Failed to map \"%s\": %s\n", dst, strerror(errno));
 		return -1;
 	}
