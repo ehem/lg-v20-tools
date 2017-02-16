@@ -9,6 +9,14 @@ LOCAL_SRC_FILES := dirtysanta.c
 #	-DBACKUP_ALL_BACKUPS	To backup even backup areas.
 LOCAL_CFLAGS := -Wall
 LOCAL_C_INCLUDES := include
+#$(LOCAL_PATH)/include
 LOCAL_LDLIBS := -llog
+include $(BUILD_EXECUTABLE)
+
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := syncfile
+LOCAL_SRC_FILES := syncfile.c
+LOCAL_CFLAGS := -Wall
 include $(BUILD_EXECUTABLE)
 
