@@ -190,19 +190,27 @@ if __name__ == "__main__":
 				# delete the file!
 				continue
 
+			idx = 0
 			for target in targets[name]:
 				# used for adding lines
 				if target[0] == None:
 					buf += target[1]
+					idx = len(buf)
 					continue
-				idx = buf.find(target[0])
+				idx = buf.find(target[0], idx)
+				if idx < 0:
+					print("Failed to find string \"{:s}\" in ramdisk file \"{:s}\"!".format(name, target[0]), file=sys.stderr)
+					sys.exit(1)
 				buf = buf[:idx] + target[1] + buf[idx+len(target[0]):]
+				idx += len(target[1])
 
 			# mark as done
 			del targets[name]
 
 		cpiowrite(ramout, head, name, buf)
 
+
+	ramin.close()
 
 	ramout.close()
 
