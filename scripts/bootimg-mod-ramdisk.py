@@ -66,6 +66,18 @@ CPIOCHECK	= 12
 
 
 targets = {
+#	# Modifications to system properties
+#	'default.prop': (
+#		# Lets `adb shell` be root
+#		(b"ro.secure=1",		b"ro.secure=0"),
+#
+#		# Enable debugging property
+#		(b"ro.debuggable=0",		b"ro.debuggable=1"),
+#
+#		# Get it turned on during boot for debugging!
+#		(b"persist.sys.usb.config=boot", b"persist.sys.usb.config=boot,adb"),
+#	),
+
 	# Modifications to filesystem table
 	'fstab.elsa': (
 		# Remove dm-verify from fstab, enable fsck (add "check"?)
@@ -73,6 +85,9 @@ targets = {
 		# Disables forced encryption (a Bad Thing(tm), really)
 		(b"wait,check,forceencrypt",	b"wait,check,encryptable"),
 	),
+
+	# Delete the dm-verity key
+	'verity_key': None,
 }
 
 
