@@ -43,10 +43,12 @@
 #endif
 
 static const char *const log_tag="dirtysanta";
+/* in order of severity, error is severe, verbose is random talking */
 #define LOGE(...) do { __android_log_print(ANDROID_LOG_ERROR, log_tag, __VA_ARGS__); } while(0)
 #define LOGW(...) do { __android_log_print(ANDROID_LOG_WARN, log_tag, __VA_ARGS__); } while(0)
-#define LOGV(...) do { __android_log_print(ANDROID_LOG_INFO, log_tag, __VA_ARGS__); } while(0)
+#define LOGI(...) do { __android_log_print(ANDROID_LOG_INFO, log_tag, __VA_ARGS__); } while(0)
 #define LOGD(...) do { __android_log_print(ANDROID_LOG_DEBUG, log_tag, __VA_ARGS__); } while(0)
+#define LOGV(...) do { __android_log_print(ANDROID_LOG_VERBOSE, log_tag, __VA_ARGS__); } while(0)
 
 static void tryexec(int argc, char **argv, char **envp);
 
@@ -72,25 +74,25 @@ int main(int argc, char **argv, char **envp)
 	/* now things get interesting */
 	sleep(5);
 
-	LOGV("Starting flash of Aboot!");
+	LOGI("Starting flash of Aboot!");
 
 	if((res=copyfile("/storage/emulated/0/aboot.img", "/dev/block/sde6"))<=0) {
-		if(res==0) LOGV("aboot.img absent, skipped flash of aboot");
-		else if(res==-1) LOGV("Failed during opening of Aboot, aborting!");
+		if(res==0) LOGI("aboot.img absent, skipped flash of aboot");
+		else if(res==-1) LOGI("Failed during opening of Aboot, aborting!");
 		else {
 			/* VERY VERY BAD!!! */
 			LOGW("Flash of Aboot failed!  Trying to revert!");
 			if(copyfile("aboot.img", "/dev/block/sde6")<=0)
 				LOGE("Reinstallation of Aboot failed, phone state unknown/unsafe, PANIC!");
 			else
-				LOGV("Reinstallation of Aboot succeeded, but Dirty Santa failed.");
+				LOGI("Reinstallation of Aboot succeeded, but Dirty Santa failed.");
 		}
 
 		sleep(999999);
 		return -1;
 	}
 
-	LOGV("Finished. Please run Step 2 now.");
+	LOGI("Finished. Please run Step 2 now.");
 
 	sleep(999999);
 	return 0;
@@ -108,7 +110,7 @@ static void tryexec(int argc, char **argv, char **envp)
 	if(!strcmp(argv[0], "/system/bin/atd")) return;
 
 	/* Alas, while an otherwise viable approach, looks like SE Linux... */
-	LOGD("dirtysanta executable invoked as non-atd");
+	LOGV("dirtysanta executable invoked as non-atd");
 
 	while(strlen(fullpath)) {
 		char *const tmp=strchr(fullpath, ':');
@@ -120,12 +122,12 @@ static void tryexec(int argc, char **argv, char **envp)
 
 		execve(command, args, envp);
 		if(errno!=ENOENT) {
-			LOGV("Unknown failure trying to invoke dirtycow/applypatch: \"%s\"", strerror(errno));
+			LOGI("Unknown failure trying to invoke dirtycow/applypatch: \"%s\"", strerror(errno));
 			exit(1);
 		}
 	}
 
-	LOGV("Failed to invoke dirtycow/applypatch, unable to continue.");
+	LOGI("Failed to invoke dirtycow/applypatch, unable to continue.");
 	exit(1);
 }
 
@@ -238,22 +240,22 @@ static void dobackups()
 	LOGD("Backup directory is: %s", backupdir);
 
 	if(chdir(backupdir)) {
-		LOGV("chdir() failed! (%s)", strerror(errno));
+		LOGI("chdir() failed! (%s)", strerror(errno));
 		exit(1);
 	}
 
 
-	LOGV("Starting Backup");
+	LOGD("Starting Backup");
 
 	for(i=0; backuplist[i][0]; ++i) {
-		LOGD("Backing up %s", backuplist[i][1]);
+		LOGV("Backing up %s", backuplist[i][1]);
 		if(copyfile(backuplist[i][0], backuplist[i][1])<=0) {
-			LOGV("Backup of %s failed, aborting!", backuplist[i][1]);
+			LOGI("Backup of %s failed, aborting!", backuplist[i][1]);
 			exit(1);
 		}
 	}
 
-	LOGV("Backup Complete.");
+	LOGD("Backup Complete.");
 }
 
 
@@ -280,7 +282,7 @@ static off_t copyfile(const char *src, const char *dst)
 			if(dstsize!=size) ftruncate(dstfd, size);
 			if(close(dstfd)<0) return -1;
 
-			LOGD("Skipping copy of \"%s\" to \"%s\", already identical", src, dst);
+			LOGV("Skipping copy of \"%s\" to \"%s\", already identical", src, dst);
 
 			return size;
 		}
@@ -290,7 +292,7 @@ static off_t copyfile(const char *src, const char *dst)
 
 	if(lseek(dstfd, 0, SEEK_SET)!=0) {
 		munmap(buf, size);
-		LOGV("copyfile(): lseek() to begining of %s failed?! error: %s", dst, strerror(errno));
+		LOGI("copyfile(): lseek() to begining of %s failed?! error: %s", dst, strerror(errno));
 		return -1;
 	}
 	/* any failure after this point suggests a write failure, BAD */
