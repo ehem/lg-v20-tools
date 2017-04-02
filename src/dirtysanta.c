@@ -138,6 +138,7 @@ static void dobackups()
 		{"/dev/block/sde6",	"abootbackup.img"},
 		{"/dev/block/sde1",	"bootbackup.img"},
 		{"/dev/block/sde2",	"recoverybackup.img"},
+		{"/sys/firmware/fdt",	"fdt.bin"},
 
 #ifdef BACKUP_ALL_NONKDZ
 		/* these are non-standard, but interesting */
