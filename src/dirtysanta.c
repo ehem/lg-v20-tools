@@ -259,20 +259,103 @@ static void dobackups()
 }
 
 
-static off_t copyfile(const char *src, const char *dst)
+static off64_t copyfile(const char *src, const char *dst)
 {
-	int srcfd, dstfd;
-	off_t size, dstsize;
+	int srcfd=-1, dstfd=-1;
+	off64_t size=0;
+	off64_t  dstsize;
 	off64_t blksz;
-	char *buf, *dstbuf;
+	char *buf=NULL, *dstbuf=NULL;
+	char *sbuf=NULL, *dbuf=NULL;
 	ssize_t count;
+	off64_t ret=0;
 
-	if((srcfd=open(src, O_RDONLY|O_LARGEFILE))<0) return -1;
-	if((dstfd=open(dst, O_RDWR|O_LARGEFILE|O_CREAT, 0666))<0) return -1;
-	size=lseek(srcfd, 0, SEEK_END);
-	if((buf=mmap(NULL, size, PROT_READ, MAP_PRIVATE, srcfd, 0))==MAP_FAILED) return -1;
+	if((srcfd=open(src, O_RDONLY|O_LARGEFILE))<0) {
+		LOGD("open(\"%s\") failed: %s", src, strerror(errno));
+		ret=-1;
+		goto cleanup;
+	}
+	if((dstfd=open(dst, O_RDWR|O_LARGEFILE|O_CREAT, 0666))<0) {
+		LOGD("open(\"%s\") failed: %s", dst, strerror(errno));
+		ret=-1;
+		goto cleanup;
+	}
 
-	if((dstsize=lseek(dstfd, 0, SEEK_END))>=size) {
+	if((size=lseek(srcfd, 0, SEEK_END))<0) {
+		LOGI("copyfile(): failed to get size of \"%s\" error: %s", src, strerror(errno));
+		ret=-1;
+		goto cleanup;
+	}
+
+	if((dstsize=lseek(dstfd, 0, SEEK_END))<0) {
+		LOGI("copyfile(): failed to get size of \"%s\" error: %s", dst, strerror(errno));
+		ret=-1;
+		goto cleanup;
+	}
+
+	if(lseek(srcfd, 0, SEEK_SET)!=0) {
+		LOGI("copyfile(): lseek() to begining of %s failed?! error: %s", src, strerror(errno));
+		ret=-1;
+		goto cleanup;
+	}
+
+	if(lseek(dstfd, 0, SEEK_SET)!=0) {
+		LOGI("copyfile(): lseek() to begining of %s failed?! error: %s", dst, strerror(errno));
+		ret=-1;
+		goto cleanup;
+	}
+
+	if((buf=mmap(NULL, size, PROT_READ, MAP_PRIVATE, srcfd, 0))==MAP_FAILED) {
+		const long pagesz=sysconf(_SC_PAGESIZE);
+		off64_t cur;
+		unsigned long wcnt=0;
+
+/* this happens for /sys/firmware/fdt ENODEV => not supported */
+		LOGD("mmap(\"%s\") failed: %s", src, strerror(errno));
+		buf=NULL;
+		LOGD("trying fallback copy method for \"%s\"", src);
+
+
+		if(!(sbuf=malloc(pagesz))||!(dbuf=malloc(pagesz))) {
+			LOGD("malloc(%ld) failed, aborting!", pagesz);
+			ret=-1;
+			goto cleanup;
+		}
+
+		if(dstsize!=size) ftruncate(dstfd, size);
+
+		for(cur=0; cur<size; cur+=pagesz) {
+			const off64_t sz=cur+pagesz>size?size-cur:pagesz;
+			if(read(srcfd, sbuf, sz)!=sz||
+read(dstfd, dbuf, sz)!=sz) {
+				LOGW("copyfile(): read() failure");
+				ret=-100;
+				goto cleanup;
+			}
+			if(memcmp(sbuf, dbuf, sz)) {
+				++wcnt;
+				errno=0;
+				if((ret=lseek(dstfd, -sz, SEEK_CUR))!=cur) {
+					LOGW("copyfile(): lseek() failure on destination (ret=%ld, expected=%ld, cnt=%ld, err=\"%s\")", ret, cur, sz, strerror(errno));
+					ret=-100;
+					goto cleanup;
+				}
+
+				if(write(dstfd, sbuf, sz)!=sz) {
+					LOGW("copyfile(): Failed while write()in \"%s\", cause: %s", dst, strerror(errno));
+					ret=-100;
+					goto cleanup;
+				}
+			}
+		}
+
+		LOGD("Wrote %ld of %ld pagesize (%ld) chunks", wcnt, size/pagesz, pagesz);
+
+		ret=size;
+		goto cleanup;
+	}
+
+	if(dstsize>=size) {
 
 		if((dstbuf=mmap(NULL, dstsize, PROT_READ, MAP_PRIVATE, dstfd, 0))==MAP_FAILED) goto diff;
 		if(!memcmp(buf, dstbuf, size)) {
@@ -296,13 +379,12 @@ static off_t copyfile(const char *src, const char *dst)
 		return -1;
 	}
 	/* any failure after this point suggests a write failure, BAD */
-	if((count=write(dstfd, buf, size))<size) {
+	if((count=write(dstfd, buf, size))!=size) {
 		munmap(buf, size);
 		LOGW("copyfile(): Failed while write()ing \"%s\", returned %zd cause: %s", dst, count, strerror(errno));
 		return -100;
 	}
 	munmap(buf, size);
-	close(srcfd);
 
 	if(!ioctl(dstfd, BLKSSZGET, &blksz)) {
 		/* target is an actual (flash) device */
@@ -321,10 +403,18 @@ static off_t copyfile(const char *src, const char *dst)
 		if(dstsize!=size) ftruncate(dstfd, size);
 	}
 
-	if((count=close(dstfd))<0) {
+	if(ret==0) ret=size;
+
+cleanup:
+	if(sbuf) free(sbuf);
+	if(dbuf) free(dbuf);
+
+	if(srcfd>=0) close(srcfd);
+
+	if(dstfd>=0&&(count=close(dstfd))<0) {
 		LOGW("copyfile(): Failed during close() \"%s\", returned %zd cause: %s", dst, count, strerror(errno));
-		return -100;
+		if(ret>=0) ret=-100;
 	}
-	return size;
+	return ret;
 }
 
