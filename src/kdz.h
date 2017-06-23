@@ -22,6 +22,7 @@
 #define _KDZ_H_
 
 #include <inttypes.h>
+#include <unistd.h>
 
 
 #define KDZ_MAGIC_LEN 8
@@ -84,13 +85,19 @@ struct kdz_chunk {
 
 struct kdz_file {
 	int fd;
-	struct kdz_chunk kdz_chunk;
+	char *mmap;
+	off_t mlen;
+	off_t off; /* offset of DZ header */
 	struct dz_file dz_file;
-	struct dz_chunk (*dz_chunk)[];
+	struct {
+		off_t off; /* offset of header */
+		struct dz_chunk dz;
+	} chunks[];
 };
 
 
-struct kdz_file *open_kdzfile(const char *filename);
+extern struct kdz_file *open_kdzfile(const char *filename);
+extern void close_kdzfile(struct kdz_file *kdz);
 
 #endif
 
