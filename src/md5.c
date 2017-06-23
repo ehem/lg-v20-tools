@@ -19,48 +19,56 @@
 ************************************************************************/
 
 
+#include <dlfcn.h>
+#include <stdlib.h>
 #include <stdio.h>
 
-#include "kdz.h"
 #include "md5.h"
 
+static void *libcrypto=NULL;
 
-int main(int argc, char **argv)
+int (*pMD5_Init)(MD5_CTX *c)=NULL;
+int (*pMD5_Update)(MD5_CTX *c, const void *data, size_t len)=NULL;
+int (*pMD5_Final)(unsigned char *md, MD5_CTX *c)=NULL;
+
+
+void md5_start(void)
 {
-	struct kdz_file *kdz;
-	int ret=0;
+	int i;
+	struct {
+		void **psym;
+		const char name[16];
+	} syms[]={
+		{(void **)&pMD5_Final,	"MD5_Final"},
+		{(void **)&pMD5_Update,	"MD5_Update"},
+		{(void **)&pMD5_Init,	"MD5_Init"},
+	};
 
-	if(argc!=2) {
-		fprintf(stderr, "%s <KDZ file>\n", argv[0]);
-		return 1;
+	if(libcrypto) return;
+
+	if(!(libcrypto=dlopen("libcrypto.so", RTLD_GLOBAL))) {
+		fprintf(stderr, "Failed to dlopen() libcrypto.so: %s\n",
+dlerror());
+		exit(-1);
 	}
 
-/*
-
--v verbose
--q quiet
-
--t test
--b write bootloader
--B set blocksize
--s write system
-
-*/
-
-	md5_start();
-
-	if(!(kdz=open_kdzfile(argv[1]))) {
-		fprintf(stderr, "Failed to open KDZ file \"%s\", abortting\n", argv[1]);
-		ret=1;
-		goto abort;
+	for(i=0; i<sizeof(syms)/sizeof(syms[0]); ++i) {
+		if(!(*(syms[i].psym)=dlsym(libcrypto, syms[i].name))) {
+			fprintf(stderr, "Failed to resolve \"%s\": %s\n",
+syms[i].name, dlerror());
+			exit(-1);
+		}
 	}
+}
 
+void md5_stop(void)
+{
+	if(!libcrypto) return;
 
-abort:
-	if(kdz) close_kdzfile(kdz);
-
-	md5_stop();
-
-	return ret;
+	dlclose(libcrypto);
+	libcrypto=NULL;
+	pMD5_Init=NULL;
+	pMD5_Update=NULL;
+	pMD5_Final=NULL;
 }
 

@@ -18,49 +18,27 @@
 *$Id$		*
 ************************************************************************/
 
+#ifndef _MD5_H_
+#define _MD5_H_
 
-#include <stdio.h>
+#include <inttypes.h>
 
-#include "kdz.h"
-#include "md5.h"
+/* due to lack of explict information about TWRP, I'm forced to make due
+with these declarations...
 
+The MD5_CTX structure is almost certainly overly large, but that works
+unlike being too small by 1 byte */
 
-int main(int argc, char **argv)
-{
-	struct kdz_file *kdz;
-	int ret=0;
+typedef struct {
+	uint64_t blobs[16];
+} MD5_CTX;
 
-	if(argc!=2) {
-		fprintf(stderr, "%s <KDZ file>\n", argv[0]);
-		return 1;
-	}
+extern int (*pMD5_Init)(MD5_CTX *c);
+extern int (*pMD5_Update)(MD5_CTX *c, const void *data, size_t len);
+extern int (*pMD5_Final)(unsigned char *md, MD5_CTX *c);
 
-/*
+extern void md5_start(void);
+extern void md5_stop(void);
 
--v verbose
--q quiet
-
--t test
--b write bootloader
--B set blocksize
--s write system
-
-*/
-
-	md5_start();
-
-	if(!(kdz=open_kdzfile(argv[1]))) {
-		fprintf(stderr, "Failed to open KDZ file \"%s\", abortting\n", argv[1]);
-		ret=1;
-		goto abort;
-	}
-
-
-abort:
-	if(kdz) close_kdzfile(kdz);
-
-	md5_stop();
-
-	return ret;
-}
+#endif
 
