@@ -23,6 +23,7 @@
 
 #include <inttypes.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 
 #define KDZ_MAGIC_LEN 8
@@ -90,14 +91,22 @@ struct kdz_file {
 	off_t off; /* offset of DZ header */
 	struct dz_file dz_file;
 	struct {
-		off_t off; /* offset of header */
+		off_t zoff; /* offset of Z-stream */
 		struct dz_chunk dz;
 	} chunks[];
 };
 
 
+/* open a file and load KDZ structure */
 extern struct kdz_file *open_kdzfile(const char *filename);
+/* close file and deallocate KDZ structure */
 extern void close_kdzfile(struct kdz_file *kdz);
+
+/* test for "safe" application */
+extern bool test_kdzfile(struct kdz_file *kdz);
+
+/* test and report state of device/KDZ */
+extern int report_kdzfile(struct kdz_file *kdz);
 
 #endif
 
