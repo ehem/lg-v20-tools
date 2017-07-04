@@ -24,6 +24,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <inttypes.h>
+#include <string.h>
 
 #include "bootimg.h"
 
@@ -37,9 +38,35 @@ struct misc_hwinfo {
 	uint32_t sim_num;
 };
 
-
 const char magic[]="LGE ONE BINARY\0";
 
+
+char model_name[23];
+char sim_num[2]={'\0', '\0'};
+char dsds_str[10]; //info->sim_num==2?"dsds":"none"
+char cmdline[2048]; /* lots of slack so all the entries can be appended */
+
+
+struct entry {
+	const char *const key;
+	const char *const val;
+};
+
+const struct entry entries[]={
+	{" model.name=",			model_name},
+	{" lge.sim_num=",			sim_num},
+	{" lge.dsds=",				dsds_str},
+	{" androidboot.bl_unlock_complete=",	"false"},
+	{" androidboot.authorized_kernel=",	"true"},
+};
+
+
+/* come on Android, even the Linux kernel has strchrnul() */
+static char *strchrnul(const char *s, int c)
+{
+	char *r;
+	return (r=strchr(s, c))?r:(char *)(s+strlen(s));
+}
 
 int main(int argc, char **argv)
 {
@@ -49,7 +76,7 @@ int main(int argc, char **argv)
 	const struct misc_hwinfo *info;
 	boot_img_hdr *bootimg;
 	char new[512];
-	char *replace;
+	int i;
 
 	if(argc>2) {
 		fprintf(stderr, "Usage: %s [<Android boot image>]\n" "If no "
@@ -95,9 +122,18 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	snprintf(new, sizeof(new), " model.name=%s lge.sim_num=%d lge.dsds=%s "
+	strlcpy(model_name, info->lg_model_name, sizeof(model_name));
+	if(info->sim_num>9) {
+		fprintf(stderr, "SIM count of %d?!  That doesn't sound right...\n", info->sim_num);
+		return 1;
+	}
+	sim_num[0]='0'+info->sim_num;
+
+	strcpy(dsds_str, info->sim_num==1?"none":"dsds");
+
+	snprintf(new, sizeof(new), " model.name=%s lge.sim_num=%s lge.dsds=%s "
 "androidboot.bl_unlock_complete=false androidboot.authorized_kernel=true",
-info->lg_model_name, info->sim_num, info->sim_num==2?"dsds":"none");
+model_name, sim_num, dsds_str);
 
 	printf("LGE model information format version %hd.%hd\n", info->hwinfo_major, info->hwinfo_minor);
 
@@ -119,15 +155,49 @@ strerror(errno));
 
 	bootimg=(boot_img_hdr *)buf;
 
-	replace=strstr((char *)bootimg->cmdline, " model.name=");
-	if(!replace) replace=(char *)bootimg->cmdline+strlen((char *)bootimg->cmdline);
 
-	if((strlen(new)+(replace-(char *)bootimg->cmdline))>sizeof(bootimg->cmdline)) {
-		fprintf(stderr, "Sorry, output would exceed safety of this program, giving up\n");
+	memcpy(cmdline, bootimg->cmdline, BOOT_ARGS_SIZE);
+	memcpy(cmdline+BOOT_ARGS_SIZE, bootimg->extra_cmdline, BOOT_EXTRA_ARGS_SIZE);
+	cmdline[BOOT_ARGS_SIZE+BOOT_EXTRA_ARGS_SIZE]='\0';
+
+	for(i=0; i<sizeof(entries)/sizeof(entries[0]); ++i) {
+		char *key, *val;
+		char *end;
+
+		if((key=strstr(cmdline, entries[i].key)))
+			val=key+strlen(entries[i].key);
+
+		else if(!strncmp(cmdline, entries[i].key+1, strlen(entries[i].key)-1))
+			val=cmdline+strlen(entries[i].key)-1;
+
+		else {
+			/* cmdline has more than enough slack for this */
+			strcat(cmdline, entries[i].key);
+			strcat(cmdline, entries[i].val);
+
+			continue; /* done for this one */
+		}
+
+		if(!strncmp(val, entries[i].val, strlen(entries[i].val))) continue;
+
+		/* sigh, need to do something about this */
+		end=strchrnul(val, ' ');
+		if(end-val!=strlen(entries[i].val)) /* different length */
+			memmove(val+strlen(entries[i].val), end, strlen(end)+1);
+
+		memcpy(val, entries[i].val, strlen(entries[i].val));
+	}
+
+	i=strlen(cmdline);
+	memset(cmdline+i, 0, sizeof(cmdline)-i);
+
+	if(i>BOOT_ARGS_SIZE+BOOT_EXTRA_ARGS_SIZE) {
+		fprintf(stderr, "Resultant command-line is too long for boot image, cannot continue\n");
 		return 1;
 	}
 
-	strcpy(replace, new);
+	memcpy(bootimg->cmdline, cmdline, BOOT_ARGS_SIZE);
+	memcpy(bootimg->extra_cmdline, cmdline+BOOT_ARGS_SIZE, BOOT_EXTRA_ARGS_SIZE);
 
 	if(lseek(fd, 0, SEEK_SET)) {
 		fprintf(stderr, "Seek failed: %s\n", strerror(errno));
