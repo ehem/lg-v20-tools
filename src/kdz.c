@@ -22,8 +22,10 @@
 #include <unistd.h>
 #include <endian.h>
 #include <sys/mman.h>
+#include <linux/fs.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <zlib.h>
 
 #include "kdz.h"
 #include "md5.h"
@@ -35,6 +37,17 @@ const char kdz_file_magic[KDZ_MAGIC_LEN]={0x28, 0x05, 0x00, 0x00,
 const char dz_file_magic[DZ_MAGIC_LEN]={0x32, 0x96, 0x18, 0x74};
 
 const char dz_chunk_magic[DZ_MAGIC_LEN]={0x30, 0x12, 0x95, 0x78};
+
+
+static voidpf zalloc(void *ignore, uInt items, uInt size)
+{
+	return calloc(items, size);
+}
+
+static void zfree(void *ignore, void *addr)
+{
+	free(addr);
+}
 
 
 struct kdz_file *open_kdzfile(const char *filename)
@@ -129,7 +142,7 @@ __func__, ret->dz_file.major, ret->dz_file.minor, ret->dz_file.device, chunks);
 			goto abort;
 		}
 
-		ret->chunks[i].off=cur;
+		ret->chunks[i].zoff=cur+sizeof(struct dz_chunk);
 		if(i)
 			(*pMD5_Update)(&md5, map+cur, sizeof(struct dz_chunk));
 		memcpy(&ret->chunks[i].dz, map+cur, sizeof(struct dz_chunk));
@@ -194,4 +207,60 @@ void close_kdzfile(struct kdz_file *kdz)
 	close(kdz->fd);
 	free(kdz);
 }
+
+
+/*
+check in all cases:
+Slice Name: "BackupGPT"
+Slice Name: "PrimaryGPT"
+
+update:
+Slice Name: "modem"
+Slice Name: "system"
+Slice Name: "OP"
+
+expect modified:
+Slice Name: "recovery"
+Slice Name: "recoverybak"
+Slice Name: "boot"
+
+expect DirtySanta:
+Slice Name: "aboot"
+Slice Name: "abootbak"
+
+worry about:
+
+Slice Name: "apdp"
+Slice Name: "cust"
+Slice Name: "factory"
+Slice Name: "msadp"
+Slice Name: "persist"
+Slice Name: "rct"
+Slice Name: "sec"
+
+Slice Name: "cmnlib"
+Slice Name: "cmnlib64"
+Slice Name: "cmnlib64bak"
+Slice Name: "cmnlibbak"
+Slice Name: "devcfg"
+Slice Name: "devcfgbak"
+Slice Name: "hyp"
+Slice Name: "hypbak"
+Slice Name: "keymaster"
+Slice Name: "keymasterbak"
+Slice Name: "laf"
+Slice Name: "lafbak"
+Slice Name: "pmic"
+Slice Name: "pmicbak"
+Slice Name: "raw_resources"
+Slice Name: "raw_resourcesbak"
+Slice Name: "rpm"
+Slice Name: "rpmbak"
+Slice Name: "tz"
+Slice Name: "tzbak"
+Slice Name: "xbl"
+Slice Name: "xbl2"
+Slice Name: "xbl2bak"
+Slice Name: "xblbak"
+*/
 
