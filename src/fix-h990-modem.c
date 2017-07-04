@@ -51,14 +51,15 @@ char cmdline[2048]; /* lots of slack so all the entries can be appended */
 struct entry {
 	const char *const key;
 	const char *const val;
+	const unsigned overwrite:1;
 };
 
 const struct entry entries[]={
-	{" model.name=",			model_name},
-	{" lge.sim_num=",			sim_num},
-	{" lge.dsds=",				dsds_str},
-	{" androidboot.bl_unlock_complete=",	"false"},
-	{" androidboot.authorized_kernel=",	"true"},
+	{" model.name=",			model_name,	1},
+	{" lge.sim_num=",			sim_num,	1},
+	{" lge.dsds=",				dsds_str,	1},
+	{" androidboot.bl_unlock_complete=",	"false",	0},
+	{" androidboot.authorized_kernel=",	"true",		0},
 };
 
 
@@ -178,6 +179,9 @@ strerror(errno));
 
 			continue; /* done for this one */
 		}
+
+		/* some of the values can safely be left alone */
+		if(!entries[i].overwrite) continue;
 
 		if(!strncmp(val, entries[i].val, strlen(entries[i].val))) continue;
 
