@@ -15,7 +15,7 @@
 *	License along with this program.  If not, see			*
 *	<http://www.gnu.org/licenses/>.					*
 *************************************************************************
-*$Id$		*
+*$Id$			*
 ************************************************************************/
 
 #ifndef _KDZ_H_
@@ -95,6 +95,10 @@ struct kdz_file {
 		struct dz_chunk dz;
 	} chunks[];
 };
+
+
+/* verbosity level */
+extern int verbose;
 
 
 /* open a file and load KDZ structure */
