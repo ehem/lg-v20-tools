@@ -89,6 +89,8 @@ struct kdz_file {
 	char *mmap;
 	off_t mlen;
 	off_t off; /* offset of DZ header */
+/*	uint32_t max_target; ** maximum chunk data payload size **
+	uint8_t max_device;  ** maximum device number */
 	struct dz_file dz_file;
 	struct {
 		off_t zoff; /* offset of Z-stream */

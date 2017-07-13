@@ -142,7 +142,7 @@ int main(int argc, char **argv)
 	switch(mode) {
 		bool okay;
 	case REPORT:
-		printf("Invoke report() (to be implemented)\n");
+		ret=report_kdzfile(kdz);
 		break;
 	case TEST:
 		printf("Invoke testmode() (to be implemented)\n");
