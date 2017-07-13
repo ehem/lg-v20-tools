@@ -209,6 +209,152 @@ void close_kdzfile(struct kdz_file *kdz)
 }
 
 
+int report_kdzfile(struct kdz_file *kdz)
+{
+	int i;
+	int fd=-1;
+	int dev=-1;
+	off64_t blksz;
+	z_stream zstr={
+		.zalloc=zalloc,
+		.zfree=zfree,
+	};
+	MD5_CTX md5;
+	char md5out[16];
+	uint32_t crc;
+	char *map=NULL;
+	off_t mlen;
+	char *buf=NULL;
+	uint32_t bufsz=0;
+	uint32_t cur;
+	uint32_t mismatch;
+
+	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
+
+		if(kdz->chunks[i].dz.device!=dev) {
+			char name[16];
+			if(fd>=0) close(fd);
+			if(map) munmap(map, mlen);
+			dev=kdz->chunks[i].dz.device;
+			snprintf(name, sizeof(name), "/dev/block/sd%c", 'a'+dev);
+
+			if((fd=open(name, O_RDONLY|O_LARGEFILE))<0) {
+				perror("open");
+				goto abort;
+			}
+			blksz=0;
+			if(ioctl(fd, BLKSSZGET, &blksz)<0) {
+				perror("ioctl");
+				goto abort;
+			}
+			if(bufsz!=blksz) {
+				free(buf);
+				bufsz=blksz;
+				if(!(buf=malloc(bufsz))) {
+					fprintf(stderr,
+"Memory allocation error, cannot continue\n");
+					goto abort;
+				}
+			}
+
+			if((mlen=lseek(fd, 0, SEEK_END))<0) {
+				perror("lseek");
+				goto abort;
+			}
+			if((map=mmap(NULL, mlen, PROT_READ, MAP_SHARED, fd, 0))==MAP_FAILED) {
+				map=NULL;
+				perror("mmap");
+				goto abort;
+			}
+		}
+
+		(*pMD5_Init)(&md5);
+		crc=crc32(0, Z_NULL, 0);
+
+		zstr.next_in=(Bytef *)(kdz->mmap+kdz->chunks[i].zoff);
+		zstr.avail_in=kdz->chunks[i].dz.data_size;
+		if(inflateInit(&zstr)!=Z_OK) {
+			fprintf(stderr, "inflateInit() failed: %s\n", zstr.msg);
+			inflateEnd(&zstr);
+			goto abort;
+		}
+
+		mismatch=0;
+
+
+
+		if(kdz->chunks[i].dz.target_size%blksz) {
+			printf("Block, not a multiple of block size!\n");
+		}
+
+		cur=0;
+
+		while(cur<kdz->chunks[i].dz.target_size) {
+
+			zstr.next_out=(unsigned char *)buf;
+			zstr.avail_out=bufsz;
+
+			switch(inflate(&zstr, Z_SYNC_FLUSH)) {
+			case Z_OK:
+				break;
+			case Z_STREAM_END:
+				break;
+			default:
+				printf("Chunk %d(%s): inflate() failed: %s\n",
+i, kdz->chunks[i].dz.slice_name, zstr.msg);
+
+				goto abort_block;
+			}
+
+			(*pMD5_Update)(&md5, buf, bufsz);
+			crc=crc32(crc, (Bytef *)buf, bufsz);
+
+			if(memcmp(map+kdz->chunks[i].dz.target_addr*blksz+cur,
+buf, blksz)) ++mismatch;
+
+			cur+=blksz;
+		}
+
+		(*pMD5_Final)((unsigned char *)md5out, &md5);
+
+		if(crc!=kdz->chunks[i].dz.crc32)
+			printf("Chunk %d(%s): CRC32 mismatch!\n", i, kdz->chunks[i].dz.slice_name);
+
+		if(memcmp(md5out, kdz->chunks[i].dz.md5, sizeof(md5out)))
+			printf("Chunk %d(%s): MD5 mismatch!\n", i, kdz->chunks[i].dz.slice_name);
+
+		if(mismatch)
+			printf("Chunk %d(%s): %d of %ld blocks mismatched\n", i,
+kdz->chunks[i].dz.slice_name, mismatch, kdz->chunks[i].dz.target_size/blksz);
+		else
+			printf("Chunk %d(%s): all %ld blocks matched\n", i,
+kdz->chunks[i].dz.slice_name, kdz->chunks[i].dz.target_size/blksz);
+
+	abort_block:
+		inflateEnd(&zstr);
+	}
+
+	munmap(map, mlen);
+	free(buf);
+	close(fd);
+
+	return 0;
+
+abort:
+	/* map will only be non-NULL after mmap(), by which time mlen!=0 */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+	if(map) munmap(map, mlen);
+#pragma GCC diagnostic pop
+	if(buf) free(buf);
+	if(fd>=0) close(fd);
+
+	inflateEnd(&zstr);
+
+	return 128;
+}
+
+
 /*
 check in all cases:
 Slice Name: "BackupGPT"
@@ -216,7 +362,7 @@ Slice Name: "PrimaryGPT"
 
 update:
 Slice Name: "modem"
-Slice Name: "system"
+Slice Name: "system"  // need to preserve lib/modules if possible
 Slice Name: "OP"
 
 expect modified:
