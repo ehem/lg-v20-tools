@@ -22,7 +22,12 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <endian.h>
+#ifdef USE_ICONV
 #include <iconv.h>
+#else
+#include <uchar.h>
+typedef void *iconv_t;
+#endif
 #include <stdbool.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -40,7 +45,7 @@ const union _gpt_magic gpt_magic={.ch={'E','F','I',' ','P','A','R','T'}};
 
 
 
-static bool testgpt(int fd, char **buf, size_t blocksz);
+static bool testgpt(int fd, char **buf, uint32_t blocksz);
 
 static void gpt_raw2native(struct gpt_header *);
 
@@ -59,7 +64,7 @@ struct gpt_data *readgpt(int fd, enum gpt_type type)
 	char *buf;
 	uint32_t cnt;
 	int32_t i;
-	off64_t blocksz;
+	uint32_t blocksz;
 	iconv_t iconvctx;
 
 	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
@@ -105,22 +110,26 @@ success:
 		return NULL;
 	}
 
+#ifdef USE_ICONV
 	if((iconvctx=iconv_open("UTF8", "UTF16LE"))<0) {
 		free(buf);
 		return NULL;
 	}
+#endif
 
 	for(i=cnt-1; i>=0; --i)
 		gpt_entry_raw2native(ret->entry+i, _ret->entry+i, iconvctx);
 
+#ifdef USE_ICONV
 	iconv_close(iconvctx);
+#endif
 
 //	printf("DEBUG: Found GPT with size=%zd\n", blocksz);
 
 	return ret;
 }
 
-static bool testgpt(int fd, char **_buf, size_t blocksz)
+static bool testgpt(int fd, char **_buf, uint32_t blocksz)
 {
 	uint32_t len, crc;
 	off64_t start;
@@ -132,7 +141,8 @@ static bool testgpt(int fd, char **_buf, size_t blocksz)
 	if(head->magic!=gpt_magic.num) return false;
 	len=le32toh(head->headerSize);
 	if(len<GPT_SIZE||len>blocksz) return false;
-	crc=crc32(0, (Byte *)head, (char *)&head->headerCRC32-(char *)&head->magic);
+	crc=crc32(0, Z_NULL, 0);
+	crc=crc32(crc, (Byte *)head, (char *)&head->headerCRC32-(char *)&head->magic);
 	crc=crc32(crc, (Byte *)"\x00\x00\x00\x00", 4);
 	crc=crc32(crc, (Byte *)&head->reserved, len-((char *)&head->reserved-(char *)&head->magic));
 	if(le32toh(head->headerCRC32)!=crc) return false;
@@ -303,7 +313,9 @@ bool gpt_entries2raw(struct _gpt_data *dst, const struct gpt_data *gpt)
 	iconv_t iconvctx;
 	int i;
 
+#ifdef USE_ICONV
 	if((iconvctx=iconv_open("UTF16LE", "UTF8"))<0) return false;
+#endif
 
 	for(i=0; i<gpt->head.entryCount; ++i) {
 		struct _gpt_entry tmp;
@@ -311,7 +323,9 @@ bool gpt_entries2raw(struct _gpt_data *dst, const struct gpt_data *gpt)
 		memcpy(dst->entry+i, &tmp, sizeof(struct _gpt_entry));
 	}
 
+#ifdef USE_ICONV
 	iconv_close(iconvctx);
+#endif
 
 	return true;
 }
@@ -367,12 +381,26 @@ iconv_t iconvctx)
 {
 	char *in=(char *)src->name, out[sizeof(dst->name)], *outp=out;
 	size_t inlen, outlen;
+#ifndef USE_ICONV
+	mbstate_t state;
+#endif
 
 	in=(char *)src->name;
 	inlen=sizeof(src->name);
 	// need a temporary buffer since dst->name and src->name could overlap
 	outlen=sizeof(dst->name);
+#ifdef USE_ICONV
 	iconv(iconvctx, &in, &inlen, &outp, &outlen);
+#else
+	memset(&state, 0, sizeof(state));
+	outlen=0;
+	for(inlen=0; inlen<sizeof(src->name); ++inlen) {
+		int rc=c16rtomb(out+outlen, le16toh(src->name[inlen]), &state);
+		if(rc<0||!out[outlen]) break;
+		outlen+=rc;
+	}
+	out[outlen]='\0';
+#endif
 
 	// ensure the buffer is terminated (unsure whether iconv guarentees)
 	out[sizeof(dst->name)-1]='\0';
@@ -397,6 +425,10 @@ const struct gpt_entry *__restrict src, iconv_t iconvctx)
 	const char *in;
 	char *out;
 	size_t inlen, outlen;
+#ifndef USE_ICONV
+	mbstate_t state;
+	int rc;
+#endif
 
 	/* UUIDs are binary strings */
 	uuid_copy(dst->type, src->type);
@@ -410,8 +442,24 @@ const struct gpt_entry *__restrict src, iconv_t iconvctx)
 	inlen=strlen(src->name);
 	out=(char *)dst->name;
 	outlen=sizeof(dst->name);
+#ifdef USE_ICONV
 /* sigh, in argument should be declared "const", but isn't */
 	iconv(iconvctx, (char **)&in, &inlen, &out, &outlen);
+#else
+	memset(&state, 0, sizeof(state));
+	inlen=0;
+	outlen=0;
+	while((rc=mbrtoc16(dst->name+outlen, in+inlen, sizeof(src->name)-inlen, &state))) {
+		if(!(out[outlen]=htole16(out[outlen]))) break;
+		if(rc>0) {
+			inlen+=rc;
+			++outlen;
+		} else if(rc==-3)
+			++outlen;
+		else break;
+	}
+	out[outlen]='\0';
+#endif
 
 	/* ensure any remainder is cleared */
 	memset((char *)dst->name+sizeof(dst->name)-outlen, 0, outlen);
