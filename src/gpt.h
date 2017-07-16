@@ -110,6 +110,13 @@ enum gpt_type {GPT_NONE, GPT_ANY, GPT_PRIMARY, GPT_BACKUP};
 /* load data from a GPT */
 extern struct gpt_data *readgpt(int fd, enum gpt_type);
 
+/* load GPT data from somewhere */
+/* NOTE: gptpreadfunc() MUST interpret negative numbers as being relative
+* to the end of file/device/buffer */
+typedef ssize_t (*gptpreadfunc)(void *opaque, void *buf, size_t count, GPT_OFF_T offset);
+extern struct gpt_data *readgptb(gptpreadfunc, void *opaque, uint32_t blocksz,
+enum gpt_type);
+
 /* convert the entries into storage-media format */
 extern bool gpt_entries2raw(struct _gpt_data *dst, const struct gpt_data *gpt);
 
