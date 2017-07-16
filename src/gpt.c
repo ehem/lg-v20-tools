@@ -43,9 +43,16 @@ typedef void *iconv_t;
 /* The magic number for the GPT */
 const union _gpt_magic gpt_magic={.ch={'E','F','I',' ','P','A','R','T'}};
 
+/* used for the pread wrapper */
+struct preaddat {
+	int fd;
+	off64_t eof;
+};
 
 
-static bool testgpt(int fd, char **buf, uint32_t blocksz);
+
+static bool testgpt(gptpreadfunc preadfunc, void *opaque, char **buf,
+uint32_t blocksz);
 
 static void gpt_raw2native(struct gpt_header *);
 
@@ -55,44 +62,70 @@ static void gpt_entry_raw2native(struct gpt_entry *, struct _gpt_entry *, iconv_
 
 static void gpt_entry_native2raw(struct _gpt_entry *__restrict, const struct gpt_entry *__restrict, iconv_t);
 
+static ssize_t preadfunc(void *opaque, void *buf, size_t count, off64_t offset);
+
 
 
 struct gpt_data *readgpt(int fd, enum gpt_type type)
+{
+	struct gpt_data *ret;
+	uint32_t blocksz;
+	struct preaddat dat={fd, 0};
+
+	off64_t old=lseek64(fd, 0, SEEK_CUR);
+	dat.eof=lseek64(fd, 0, SEEK_END);
+	lseek64(fd, old, SEEK_SET);
+
+	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
+		// Success, we know the block size
+		if((ret=readgptb(preadfunc, &dat, blocksz, type)))
+			return ret;
+
+//		printf("DEBUG: Known blocksize failed to find GPT\n");
+		return ret;
+	} else {
+		// Failure, we're going to have to guess the block size
+		blocksz=1<<9; // conventional 512 bytes
+		while(blocksz<(1<<24)) { // that is a big device if 16MB blocks
+			if((ret=readgptb(preadfunc, &dat, blocksz, type)))
+				return ret;
+
+			blocksz<<=1;
+		}
+//		printf("DEBUG: Probing failed to find GPT\n");
+		return ret;
+	}
+}
+
+ssize_t preadfunc(void *_arg, void *buf, size_t count, off64_t offset)
+{
+	struct preaddat *arg=_arg;
+	if(offset<0) offset+=arg->eof;
+	return pread64(arg->fd, buf, count, offset);
+}
+
+
+struct gpt_data *readgptb(gptpreadfunc preadfunc, void *opaque,
+uint32_t blocksz, enum gpt_type type)
 {
 	struct gpt_data *ret;
 	struct _gpt_data *_ret;
 	char *buf;
 	uint32_t cnt;
 	int32_t i;
-	uint32_t blocksz;
 	iconv_t iconvctx;
 
-	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
-		// Success, we know the block size
-		if(!(buf=malloc(blocksz))) return NULL;
-		if((type!=GPT_BACKUP&&lseek64(fd, blocksz, SEEK_SET)>0)&&
-(read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
-		if((type!=GPT_PRIMARY&&lseek64(fd, -blocksz, SEEK_END)>0)&&
-(read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
-//		printf("DEBUG: Known blocksize failed to find GPT\n");
-		free(buf);
-		return NULL;
-	} else {
-		// Failure, we're going to have to guess the block size
-		blocksz=1<<9; // conventional 512 bytes
-		while(blocksz<(1<<24)) { // that is a big device if 16MB blocks
-			if(!(buf=malloc(blocksz))) return NULL;
-			if((type!=GPT_BACKUP&&lseek64(fd, blocksz, SEEK_SET)>0)&&
-(read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
 
-			if((type!=GPT_PRIMARY&&lseek64(fd, -blocksz, SEEK_END)>0)
-&&(read(fd, buf, blocksz)==blocksz)&&testgpt(fd, &buf, blocksz)) goto success;
-			free(buf);
-			blocksz<<=1;
-		}
-//		printf("DEBUG: Probing failed to find GPT\n");
-		return NULL;
-	}
+	if(!(buf=malloc(blocksz))) return NULL;
+	if(type!=GPT_BACKUP&&preadfunc(opaque, buf, blocksz, blocksz)==blocksz
+&&testgpt(preadfunc, opaque, &buf, blocksz)) goto success;
+	if(type!=GPT_PRIMARY&&preadfunc(opaque, buf, blocksz, -(off64_t)blocksz)==blocksz
+&&testgpt(preadfunc, opaque, &buf, blocksz)) goto success;
+
+//	printf("DEBUG: Failed to find GPT\n");
+	free(buf);
+	return NULL;
+
 
 success:
 	// realloc()ed by testgpt
@@ -129,7 +162,8 @@ success:
 	return ret;
 }
 
-static bool testgpt(int fd, char **_buf, uint32_t blocksz)
+static bool testgpt(gptpreadfunc preadfunc, void *opaque, char **_buf,
+uint32_t blocksz)
 {
 	uint32_t len, crc;
 	off64_t start;
@@ -158,12 +192,11 @@ static bool testgpt(int fd, char **_buf, uint32_t blocksz)
 
 	if(le64toh(head->myLBA)==1) {
 		start=le64toh(head->entryStart)*blocksz;
-		if(lseek64(fd, start, SEEK_SET)!=start) return false;
+		if(preadfunc(opaque, ret->entry, elen, start)!=elen) return false;
 	} else {
 		start=(le64toh(head->myLBA)+1-le64toh(head->entryStart))*blocksz;
-		if(lseek64(fd, -start, SEEK_END)<0) return false;
+		if(preadfunc(opaque, ret->entry, elen, -start)!=elen) return false;
 	}
-	if(read(fd, ret->entry, elen)!=elen) return false;
 
 	crc=crc32(0, (Byte *)ret->entry, elen);
 	if(le32toh(head->entryCRC32)!=crc) return false;
@@ -208,13 +241,14 @@ bool _writegpt(int fd, struct _gpt_data *new)
 	} else {
 		/* Failure, hopefully it was passed in. */
 		char *buf;
+		struct preaddat dat={fd, lseek64(fd, 0, SEEK_END)};
 
 		if(!(blocksz=new->blocksz)) return false;
 
 		/* check for the presence of *something* vaguely sane */
 		if(!(buf=malloc(blocksz))) return false;
-		if((lseek64(fd, new->head.myLBA*blocksz, SEEK_SET)<=0)||
-(read(fd, buf, blocksz)!=blocksz)||!testgpt(fd, &buf, blocksz)) {
+		if(preadfunc(&dat, buf, blocksz,
+new->head.myLBA*blocksz)!=blocksz ||!testgpt(preadfunc, &dat, &buf, blocksz)) {
 			free(buf);
 			return false;
 		}
