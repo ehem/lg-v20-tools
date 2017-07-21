@@ -8,8 +8,6 @@ LOCAL_SRC_FILES := dirtysanta.c
 #	-DBACKUP_ALL	To include everything except /system due to size.
 #	-DBACKUP_ALL_BACKUPS	To backup even backup areas.
 LOCAL_CFLAGS := -Wall
-LOCAL_C_INCLUDES := include
-#$(LOCAL_PATH)/include
 LOCAL_LDLIBS := -llog
 include $(BUILD_EXECUTABLE)
 
