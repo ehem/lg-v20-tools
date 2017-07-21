@@ -145,7 +145,21 @@ int main(int argc, char **argv)
 		ret=report_kdzfile(kdz);
 		break;
 	case TEST:
-		printf("Invoke testmode() (to be implemented)\n");
+		ret=test_kdzfile(kdz);
+		{
+			const char *res;
+			if(ret==0) res="KDZ does not appear applicable to this device\n";
+			else if(ret==1) res="KDZ appears applicable to this device\n";
+			else if(ret==2) res="KDZ appears applicable to this device and matches original\n";
+			else if(ret<0) res="Failure while testing KDZ file\n";
+			else res="internal error: test_kdzfile() unknown return code\n";
+/* GCC is smart enough to ignore this, but CLANG isn't */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-security"
+			printf(res);
+#pragma clang diagnostic pop
+
+		}
 		break;
 	case RESTORE:
 		printf("Write everything (to be implemented)\n");
