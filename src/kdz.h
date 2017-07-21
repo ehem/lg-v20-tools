@@ -87,13 +87,13 @@ struct kdz_chunk {
 struct kdz_file {
 	int fd;
 	char *mmap;
-	off_t mlen;
-	off_t off; /* offset of DZ header */
+	off64_t mlen;
+	off64_t off; /* offset of DZ header */
 /*	uint32_t max_target; ** maximum chunk data payload size **
 	uint8_t max_device;  ** maximum device number */
 	struct dz_file dz_file;
 	struct {
-		off_t zoff; /* offset of Z-stream */
+		off64_t zoff; /* offset of Z-stream */
 		struct dz_chunk dz;
 	} chunks[];
 };
@@ -109,7 +109,7 @@ extern struct kdz_file *open_kdzfile(const char *filename);
 extern void close_kdzfile(struct kdz_file *kdz);
 
 /* test for "safe" application */
-extern bool test_kdzfile(struct kdz_file *kdz);
+extern int test_kdzfile(struct kdz_file *kdz);
 
 /* test and report state of device/KDZ */
 extern int report_kdzfile(struct kdz_file *kdz);

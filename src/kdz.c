@@ -19,6 +19,8 @@
 ************************************************************************/
 
 
+#define _FILE_OFFSET_BITS 64
+
 #include <unistd.h>
 #include <endian.h>
 #include <sys/mman.h>
@@ -26,9 +28,11 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <zlib.h>
+#include <stdlib.h>
 
 #include "kdz.h"
 #include "md5.h"
+#include "gpt.h"
 
 
 const char kdz_file_magic[KDZ_MAGIC_LEN]={0x28, 0x05, 0x00, 0x00,
@@ -206,6 +210,12 @@ void close_kdzfile(struct kdz_file *kdz)
 	munmap(kdz->mmap, kdz->mlen);
 	close(kdz->fd);
 	free(kdz);
+}
+
+
+int test_kdzfile(struct kdz_file *kdz)
+{
+	return 0;
 }
 
 
