@@ -67,6 +67,7 @@ struct kdz_file *open_kdzfile(const char *filename)
 	off_t cur;
 	MD5_CTX md5;
 	char md5out[16];
+	int devs=-1;
 
 	if((fd=open(filename, O_RDONLY|O_LARGEFILE))<0) {
 		perror("failed open()ing file");
@@ -82,6 +83,10 @@ struct kdz_file *open_kdzfile(const char *filename)
 		perror("mmap() failed");
 		goto abort;
 	}
+
+	/* no need to keep it lying around, the mmap remains */
+	close(fd);
+	fd=-1;
 
 	if(memcmp(kdz_file_magic, map, KDZ_MAGIC_LEN)) {
 		perror("missing magic number");
@@ -108,14 +113,17 @@ struct kdz_file *open_kdzfile(const char *filename)
 
 	chunks=le32toh(dz.chunk_count);
 
-	if((ret=malloc(sizeof(*ret)+sizeof(ret->chunks[0])*(chunks+1)))==NULL) {
+	if(!(ret=malloc(sizeof(*ret)))) {
+		perror("memory allocation failure");
+		goto abort;
+	} else if(!(ret->chunks=malloc(sizeof(ret->chunks[0])*(chunks+1)))) {
 		perror("memory allocation failure");
 		goto abort;
 	}
 
-	ret->fd=fd;
-	ret->mmap=map;
-	ret->mlen=len;
+	ret->devs=NULL;
+	ret->map=NULL;
+
 	ret->off=le64toh(kdz->off);
 
 	memcpy(&ret->dz_file, &dz, sizeof(struct dz_file));
@@ -157,9 +165,11 @@ __func__, ret->dz_file.major, ret->dz_file.minor, ret->dz_file.device, chunks);
 		ret->chunks[i].dz.trim_count=le32toh(ret->chunks[i].dz.trim_count);
 		ret->chunks[i].dz.device=le32toh(ret->chunks[i].dz.device);
 
+		if((int32_t)ret->chunks[i].dz.device>devs) devs=ret->chunks[i].dz.device;
+
 /*		if(verbose&i)
 			printf("Slice Name: \"%s\"\n", ret->chunks[i].dz.slice_name);
-/* */
+** */
 
 		cur+=sizeof(struct dz_chunk)+ret->chunks[i].dz.data_size;
 	}
@@ -189,15 +199,71 @@ md5out[0xC], md5out[0xD], md5out[0xE], md5out[0xF]);
 		goto abort;
 	}
 
+	/* set these, then clear map so abort won't double munmap() */
+	ret->map=map;
+	ret->len=len;
+	map=NULL;
+
+
+	if(!(ret->devs=malloc(sizeof(ret->devs[0])*(devs+1)))) {
+		perror("memory allocation failure");
+		goto abort;
+	}
+
+	ret->max_device=devs;
+
+	/* ensure these start cleared, so abort procedure won't munmap() */
+	for(i=0; i<=devs; ++i) ret->devs[i].map=NULL;
+
+	for(i=0; i<=devs; ++i) {
+		char name[16];
+		snprintf(name, sizeof(name), "/dev/block/sd%c", (char)('a'+i));
+
+		if((fd=open(name, O_RDONLY|O_LARGEFILE))<0) {
+			perror("open");
+			goto abort;
+		}
+
+		if(ioctl(fd, BLKSSZGET, &ret->devs[i].blksz)<0) {
+			perror("ioctl");
+			goto abort;
+		}
+
+		if((len=lseek(fd, 0, SEEK_END))<0) {
+			perror("lseek");
+			goto abort;
+		}
+		ret->devs[i].len=len;
+
+		if((map=mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0))==MAP_FAILED) {
+			map=NULL;
+			perror("mmap");
+			goto abort;
+		}
+		ret->devs[i].map=map;
+		/* prevent double-munmap() */
+		map=NULL;
+
+		close(fd);
+	}
+
 	return ret;
 
 abort:
-	if(fd>=0) {
-		close(fd);
-		if(map) {
-			munmap(map, len);
-			if(ret) free(ret);
+	if(fd>=0) close(fd);
+	if(map) munmap(map, len);
+	if(ret) {
+		if(ret->map) munmap(ret->map, ret->len);
+
+		if(ret->chunks) free(ret->chunks);
+
+		if(ret->devs) {
+			for(i=0; i<=devs; ++i) if(ret->devs[i].map)
+				munmap(ret->devs[i].map, ret->devs[i].len);
+			free(ret->devs);
 		}
+
+		free(ret);
 	}
 	return NULL;
 }
@@ -205,10 +271,20 @@ abort:
 
 void close_kdzfile(struct kdz_file *kdz)
 {
+	int i;
+
 	if(!kdz) return;
 
-	munmap(kdz->mmap, kdz->mlen);
-	close(kdz->fd);
+	munmap(kdz->map, kdz->len);
+
+	for(i=0; i<=kdz->max_device; ++i) {
+		munmap(kdz->devs[i].map, kdz->devs[i].len);
+	}
+
+	free(kdz->devs);
+
+	free(kdz->chunks);
+
 	free(kdz);
 }
 
@@ -281,7 +357,7 @@ int report_kdzfile(struct kdz_file *kdz)
 		(*pMD5_Init)(&md5);
 		crc=crc32(0, Z_NULL, 0);
 
-		zstr.next_in=(Bytef *)(kdz->mmap+kdz->chunks[i].zoff);
+		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
 		zstr.avail_in=kdz->chunks[i].dz.data_size;
 		if(inflateInit(&zstr)!=Z_OK) {
 			fprintf(stderr, "inflateInit() failed: %s\n", zstr.msg);
