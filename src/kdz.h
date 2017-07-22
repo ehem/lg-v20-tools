@@ -85,17 +85,21 @@ struct kdz_chunk {
 };
 
 struct kdz_file {
-	int fd;
-	char *mmap;
-	off64_t mlen;
+	char *map;
+	off64_t len;
 	off64_t off; /* offset of DZ header */
-/*	uint32_t max_target; ** maximum chunk data payload size **
-	uint8_t max_device;  ** maximum device number */
+/*	uint32_t max_target; ** maximum chunk data payload size */
+	uint8_t max_device;  /* maximum device number */
 	struct dz_file dz_file;
+	struct {
+		uint32_t blksz;
+		char *map;
+		off64_t len;
+	} *devs;
 	struct {
 		off64_t zoff; /* offset of Z-stream */
 		struct dz_chunk dz;
-	} chunks[];
+	} *chunks;
 };
 
 
