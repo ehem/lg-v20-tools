@@ -298,7 +298,6 @@ int test_kdzfile(struct kdz_file *kdz)
 int report_kdzfile(struct kdz_file *kdz)
 {
 	int i;
-	int fd=-1;
 	int dev=-1;
 	off64_t blksz;
 	z_stream zstr={
@@ -309,7 +308,6 @@ int report_kdzfile(struct kdz_file *kdz)
 	char md5out[16];
 	uint32_t crc;
 	char *map=NULL;
-	off_t mlen;
 	char *buf=NULL;
 	uint32_t bufsz=0;
 	uint32_t cur;
@@ -318,21 +316,10 @@ int report_kdzfile(struct kdz_file *kdz)
 	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
 
 		if(kdz->chunks[i].dz.device!=dev) {
-			char name[16];
-			if(fd>=0) close(fd);
-			if(map) munmap(map, mlen);
 			dev=kdz->chunks[i].dz.device;
-			snprintf(name, sizeof(name), "/dev/block/sd%c", 'a'+dev);
 
-			if((fd=open(name, O_RDONLY|O_LARGEFILE))<0) {
-				perror("open");
-				goto abort;
-			}
-			blksz=0;
-			if(ioctl(fd, BLKSSZGET, &blksz)<0) {
-				perror("ioctl");
-				goto abort;
-			}
+			blksz=kdz->devs[dev].blksz;
+
 			if(bufsz!=blksz) {
 				free(buf);
 				bufsz=blksz;
@@ -343,15 +330,7 @@ int report_kdzfile(struct kdz_file *kdz)
 				}
 			}
 
-			if((mlen=lseek(fd, 0, SEEK_END))<0) {
-				perror("lseek");
-				goto abort;
-			}
-			if((map=mmap(NULL, mlen, PROT_READ, MAP_SHARED, fd, 0))==MAP_FAILED) {
-				map=NULL;
-				perror("mmap");
-				goto abort;
-			}
+			map=kdz->devs[dev].map;
 		}
 
 		(*pMD5_Init)(&md5);
@@ -420,20 +399,12 @@ kdz->chunks[i].dz.slice_name, kdz->chunks[i].dz.target_size/blksz);
 		inflateEnd(&zstr);
 	}
 
-	munmap(map, mlen);
 	free(buf);
-	close(fd);
 
 	return 0;
 
 abort:
-	/* map will only be non-NULL after mmap(), by which time mlen!=0 */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-	if(map) munmap(map, mlen);
-#pragma GCC diagnostic pop
 	if(buf) free(buf);
-	if(fd>=0) close(fd);
 
 	inflateEnd(&zstr);
 
