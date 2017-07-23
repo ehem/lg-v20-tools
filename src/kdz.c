@@ -314,6 +314,7 @@ int report_kdzfile(struct kdz_file *kdz)
 	uint32_t mismatch;
 
 	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
+		const char *fmt;
 
 		if(kdz->chunks[i].dz.device!=dev) {
 			dev=kdz->chunks[i].dz.device;
@@ -382,18 +383,20 @@ buf, blksz)) ++mismatch;
 
 		(*pMD5_Final)((unsigned char *)md5out, &md5);
 
-		if(crc!=kdz->chunks[i].dz.crc32)
+		if(crc!=le32toh(kdz->chunks[i].dz.crc32))
 			printf("Chunk %d(%s): CRC32 mismatch!\n", i, kdz->chunks[i].dz.slice_name);
 
 		if(memcmp(md5out, kdz->chunks[i].dz.md5, sizeof(md5out)))
 			printf("Chunk %d(%s): MD5 mismatch!\n", i, kdz->chunks[i].dz.slice_name);
 
 		if(mismatch)
-			printf("Chunk %d(%s): %d of %ld blocks mismatched\n", i,
-kdz->chunks[i].dz.slice_name, mismatch, kdz->chunks[i].dz.target_size/blksz);
+			fmt="Chunk %1$d(%2$s): %7$d of %3$ld blocks mismatched (%4$lu-%5$lu,trim=%6$lu)\n";
 		else
-			printf("Chunk %d(%s): all %ld blocks matched\n", i,
-kdz->chunks[i].dz.slice_name, kdz->chunks[i].dz.target_size/blksz);
+			fmt="Chunk %d(%s): all %ld blocks matched (%lu-%lu,trim=%lu)\n";
+		printf(fmt, i, kdz->chunks[i].dz.slice_name,
+kdz->chunks[i].dz.target_size/blksz, kdz->chunks[i].dz.target_addr,
+kdz->chunks[i].dz.target_addr+kdz->chunks[i].dz.trim_count,
+kdz->chunks[i].dz.trim_count, mismatch);
 
 	abort_block:
 		inflateEnd(&zstr);
