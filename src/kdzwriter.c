@@ -115,7 +115,9 @@ int main(int argc, char **argv)
 	if(argc-optind!=1) {
 		ret=1;
 	usage:
-		fprintf(stderr, "Usage: %s [-trsmOabvqB] <KDZ file>\n"
+		fprintf(stderr,
+"Copyright (C) 2017 Elliott Mitchell, distributed under GPLv3\n" "\n"
+"Usage: %s [-trsmOabvqB] <KDZ file>\n"
 "  -h  Help, this message\n" "  -v  Verbose, increase verbosity\n"
 "  -q  Quiet, decrease verbosity\n"
 "  -t  Test, does the KDZ file appear applicable to this device\n"
@@ -140,7 +142,6 @@ int main(int argc, char **argv)
 	}
 
 	switch(mode) {
-		bool okay;
 	case REPORT:
 		ret=report_kdzfile(kdz);
 		break;
@@ -162,30 +163,48 @@ int main(int argc, char **argv)
 		}
 		break;
 	case RESTORE:
+		if(test_kdzfile(kdz)<2) {
+			fprintf(stderr,
+"%s: This KDZ file is an insufficiently good match for this device,\n"
+"abandoning operation!\n", argv[0]);
+			ret=8;
+			goto abort;
+		}
 		printf("Write everything (to be implemented)\n");
 		break;
 	case BOOTLOADER:
+		if(test_kdzfile(kdz)<2) {
+			fprintf(stderr,
+"%s: This KDZ file is an insufficiently good match for this device,\n"
+"abandoning operation!\n", argv[0]);
+			ret=8;
+			goto abort;
+		}
 		printf("Write bootloader (to be implemented)\n");
 		break;
 	default:
-		okay=0;
-		if((mode&SYSTEM)==SYSTEM) {
-			printf("Write system (to be implemented)\n");
-			okay=1;
-		}
-		if((mode&MODEM)==MODEM) {
-			printf("Write modem (to be implemented)\n");
-			okay=1;
-		}
-		if((mode&OP)==OP) {
-			printf("Write OP (to be implemented)\n");
-			okay=1;
-		}
-		if((mode&KERNEL)==KERNEL) {
-			printf("Write kernel/boot (to be implemented)\n");
-			okay=1;
-		}
-		if(!okay) {
+		if((mode&WRITE)==WRITE) {
+			if(!test_kdzfile(kdz)) {
+				fprintf(stderr,
+"%s: This KDZ file does not appear to be applicable to this device,\n"
+"abandoning operation!\n", argv[0]);
+				ret=8;
+				goto abort;
+			}
+
+			if((mode&SYSTEM)==SYSTEM) {
+				printf("Write system (to be implemented)\n");
+			}
+			if((mode&MODEM)==MODEM) {
+				printf("Write modem (to be implemented)\n");
+			}
+			if((mode&OP)==OP) {
+				printf("Write OP (to be implemented)\n");
+			}
+			if((mode&KERNEL)==KERNEL) {
+				printf("Write kernel/boot (to be implemented)\n");
+			}
+		} else {
 			ret=1;
 			fprintf(stderr, "%s: no action specified\n", argv[0]);
 		}
