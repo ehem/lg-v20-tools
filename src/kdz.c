@@ -15,7 +15,7 @@
 *	License along with this program.  If not, see			*
 *	<http://www.gnu.org/licenses/>.					*
 *************************************************************************
-*$Id$		*
+*$Id$			*
 ************************************************************************/
 
 
@@ -29,6 +29,8 @@
 #include <stdio.h>
 #include <zlib.h>
 #include <stdlib.h>
+
+#include <uuid/uuid.h>
 
 #include "kdz.h"
 #include "md5.h"
@@ -289,9 +291,344 @@ void close_kdzfile(struct kdz_file *kdz)
 }
 
 
+struct gpt_buf {
+	off64_t bufsz;
+	char *buf;
+};
+
+static ssize_t gptbuffunc(struct gpt_buf *bufp, void *dst, size_t count,
+off64_t offset)
+{
+	if(offset<0) offset+=bufp->bufsz;
+	if(offset+count>bufp->bufsz) count=bufp->bufsz-offset;
+	memcpy(dst, bufp->buf+offset, count);
+	return count;
+}
+
 int test_kdzfile(struct kdz_file *kdz)
 {
-	return 0;
+	int i;
+	int dev=-1;
+	off64_t blksz;
+	z_stream zstr={
+		.zalloc=zalloc,
+		.zfree=zfree,
+	};
+	MD5_CTX md5;
+	char md5out[16];
+	uint32_t crc;
+	char *map=NULL;
+	char *buf=NULL;
+	uint32_t bufsz=0;
+	int maxreturn=3;
+	struct gpt_buf gpt_buf;
+
+	for(i=1; i<=kdz->dz_file.chunk_count&&maxreturn>0; ++i) {
+		const char *slice_name=kdz->chunks[i].dz.slice_name;
+		struct {
+			const char *name;
+			const short result;
+		} matches[]={
+			{"BackupGPT",		0x7}, /* special */
+			{"PrimaryGPT",		0x7}, /* special */
+			{"apdp",		0x2}, /* worthwhile??? */
+			{"cmnlib",		0x2},
+			{"cmnlib64",		0x2},
+			{"cmnlib64bak",		0x2},
+			{"cmnlibbak",		0x2},
+			{"devcfg",		0x2},
+			{"devcfgbak",		0x2},
+			{"factory",		0x2}, /* worthwhile??? */
+			{"hyp",			0x2},
+			{"hypbak",		0x2},
+			{"keymaster",		0x2},
+			{"keymasterbak",	0x2},
+			{"laf",			0x2},
+			{"lafbak",		0x2},
+			{"msadp",		0x2}, /* worthwhile??? */
+			{"pmic",		0x2},
+			{"pmicbak",		0x2},
+			{"raw_resources",	0x3}, /* required */
+			{"raw_resourcesbak",	0x3}, /* required */
+			{"rpm",			0x2},
+			{"rpmbak",		0x2},
+			{"sec",			0x3}, /* required */
+			{"tz",			0x2},
+			{"tzbak",		0x2},
+			{"xbl",			0x2},
+			{"xbl2",		0x2},
+			{"xbl2bak",		0x2},
+			{"xblbak",		0x2},
+		};
+		unsigned char lo=0, hi=sizeof(matches)/sizeof(matches[0]);
+		uint32_t cur=0;
+		bool mismatch=0;
+		enum gpt_type gpt_type;
+		struct gpt_data *gptdev, *gptkdz;
+		int res, mid;
+		int ii;
+
+		while(mid=(hi+lo)/2, res=strcmp(slice_name, matches[mid].name)) {
+			if(res<0) hi=mid;
+			else if(res>0) lo=mid+1;
+			if(lo==hi) goto notfound; /* unimportant, ignore */
+		}
+
+		/* going for a lower-quality match */
+		if(!(maxreturn&matches[mid].result)) continue;
+
+
+		if(kdz->chunks[i].dz.device!=dev) {
+			dev=kdz->chunks[i].dz.device;
+
+			blksz=kdz->devs[dev].blksz;
+			if(bufsz!=blksz*5) {
+				free(buf);
+				bufsz=blksz*5;
+				if(!(buf=malloc(bufsz))) {
+					fprintf(stderr,
+"Memory allocation error, cannot continue\n");
+					goto abort;
+				}
+			}
+
+			map=kdz->devs[dev].map;
+		}
+
+
+		(*pMD5_Init)(&md5);
+		crc=crc32(0, Z_NULL, 0);
+
+		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
+		zstr.avail_in=kdz->chunks[i].dz.data_size;
+		if(inflateInit(&zstr)!=Z_OK) {
+			fprintf(stderr, "inflateInit() failed: %s\n", zstr.msg);
+			inflateEnd(&zstr);
+			goto abort;
+		}
+
+		if(kdz->chunks[i].dz.target_size%blksz) {
+			fprintf(stderr, "Block, not a multiple of block size!\n");
+			goto abort;
+		}
+
+
+		while(cur<kdz->chunks[i].dz.target_size) {
+			uint32_t cmp=kdz->chunks[i].dz.target_size-cur;
+			if(cmp>bufsz) cmp=bufsz;
+
+			zstr.next_out=(unsigned char *)buf;
+			zstr.avail_out=cmp;
+
+			switch(inflate(&zstr, Z_SYNC_FLUSH)) {
+			case Z_OK:
+				break;
+			case Z_STREAM_END:
+				break;
+			default:
+				printf("Chunk %d(%s): inflate() failed: %s\n",
+i, kdz->chunks[i].dz.slice_name, zstr.msg);
+
+				goto abort;
+			}
+
+			(*pMD5_Update)(&md5, buf, cmp);
+			crc=crc32(crc, (Bytef *)buf, cmp);
+
+			/* keep going to verify the CRC and MD5 */
+			if(!mismatch&&
+memcmp(map+kdz->chunks[i].dz.target_addr*blksz+cur, buf, cmp)) mismatch=1;
+
+			cur+=cmp;
+		}
+
+		inflateEnd(&zstr);
+
+		(*pMD5_Final)((unsigned char *)md5out, &md5);
+
+		if(crc!=le32toh(kdz->chunks[i].dz.crc32)) goto abort;
+
+		if(memcmp(md5out, kdz->chunks[i].dz.md5, sizeof(md5out)))
+			goto abort;
+
+		/* exact match, nothing to worry about */
+		if(!mismatch) continue;
+
+
+		/* nuke some maxreturn bits, unless special-case match */
+		if(matches[mid].result<4) {
+			maxreturn&=~matches[mid].result;
+			continue;
+		}
+
+/* special-case match for GPTs:
+** the type-UUIDs *must* match, but Id-UUIDs can differ.
+** for sda, the border between OP and userdata does in fact differ for
+** reason unknown.  For sdg, the types differ even for perfect match KDZ. */
+
+		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
+		zstr.avail_in=kdz->chunks[i].dz.data_size;
+		if(inflateInit(&zstr)!=Z_OK) {
+			fprintf(stderr, "inflateInit() failed: %s\n", zstr.msg);
+			inflateEnd(&zstr);
+			goto abort;
+		}
+
+		if(kdz->chunks[i].dz.target_addr<=3) gpt_type=GPT_PRIMARY;
+		else {
+			gpt_type=GPT_BACKUP;
+			cur=0;
+			/* chew off enough for the remainder to fill buffer */
+			while(kdz->chunks[i].dz.target_size-cur>bufsz) {
+				zstr.next_out=(unsigned char *)buf;
+				zstr.avail_out=kdz->chunks[i].dz.target_size-bufsz-cur;
+				if(zstr.avail_out>bufsz) zstr.avail_out=bufsz;
+
+
+				switch(inflate(&zstr, Z_SYNC_FLUSH)) {
+				case Z_OK:
+					break;
+				default:
+					printf("Chunk %d(%s): inflate() failed: %s\n",
+i, kdz->chunks[i].dz.slice_name, zstr.msg);
+
+					goto abort;
+				}
+			}
+		}
+
+		zstr.next_out=(unsigned char *)buf;
+		zstr.avail_out=bufsz;
+
+		switch(inflate(&zstr, Z_SYNC_FLUSH)) {
+		case Z_OK:
+			break;
+		case Z_STREAM_END:
+			break;
+		default:
+			printf("Chunk %d(%s): inflate() failed: %s\n",
+i, kdz->chunks[i].dz.slice_name, zstr.msg);
+
+			goto abort;
+		}
+
+		inflateEnd(&zstr);
+
+
+		/* load the corresponding device GPT */
+		gpt_buf.bufsz=kdz->devs[dev].len;
+		gpt_buf.buf=kdz->devs[dev].map;
+
+		if(!(gptdev=readgptb(gptbuffunc, &gpt_buf, blksz, gpt_type))) {
+			fprintf(stderr, "Failed reading %s sd%c GPT\n",
+gpt_type==GPT_PRIMARY?"primary":"backup", 'a'+dev);
+			goto abort;
+		}
+
+
+		/* just in case, compare the other device GPT... */
+		gpt_buf.bufsz=kdz->devs[dev].len;
+		gpt_buf.buf=kdz->devs[dev].map;
+
+		if(!(gptkdz=readgptb(gptbuffunc, &gpt_buf, blksz, gpt_type==GPT_BACKUP?GPT_PRIMARY:GPT_BACKUP))) {
+			fprintf(stderr, "Failed reading %s sd%c GPT\n",
+gpt_type==GPT_BACKUP?"primary":"backup", 'a'+dev);
+			free(gptdev);
+			goto abort;
+		}
+
+		if(!comparegpt(gptdev, gptkdz)) {
+			free(gptdev);
+			free(gptkdz);
+			goto abort;
+		}
+
+		free(gptkdz);
+
+
+		/* load the KDZ GPT */
+		gpt_buf.bufsz=bufsz;
+		gpt_buf.buf=buf;
+
+		if(!(gptkdz=readgptb(gptbuffunc, &gpt_buf, blksz, gpt_type))) {
+			fprintf(stderr, "Failed reading %s KDZ sd%c GPT\n",
+gpt_type==GPT_PRIMARY?"primary":"backup", 'a'+dev);
+			free(gptdev);
+			goto abort;
+		}
+
+
+
+		/* check header fields, okay for the CRCs to differ */
+		if(memcmp(&gptdev->head, &gptkdz->head,
+(char *)&gptdev->head.headerCRC32-(char *)&gptdev->head.magic)||
+memcmp(&gptdev->head.reserved, &gptkdz->head.reserved,
+(char *)&gptdev->head.altLBA-(char *)&gptdev->head.reserved)||
+memcmp(&gptdev->head.dataStartLBA, &gptkdz->head.dataStartLBA,
+(char *)&gptdev->head.entryCRC32-(char *)&gptdev->head.dataStartLBA))
+			maxreturn=0; /* fail */
+		/* a device was encountered with the backup GPT's altLBA
+		** pointing at itself, rather than the primary GPT; this is
+		** apparently okay, but violates specifications... */
+		if(gptdev->head.altLBA!=gptkdz->head.altLBA&&
+gptkdz->head.altLBA!=1&&gptdev->head.altLBA!=gptkdz->head.myLBA)
+			maxreturn=0;
+
+		for(ii=0; ii<gptdev->head.entryCount-1&&maxreturn>0; ++ii) {
+			if(gptdev->entry[ii].flags!=gptkdz->entry[ii].flags||
+uuid_compare(gptdev->entry[ii].type, gptkdz->entry[ii].type)||
+strncmp(gptdev->entry[ii].name, gptkdz->entry[ii].name, sizeof(gptdev->entry[ii].name))) {
+				maxreturn=0;
+				break;
+			}
+
+			/* the Ids always differ on sdg */
+			if(maxreturn&2&&dev!=6&&
+uuid_compare(gptdev->entry[ii].id, gptkdz->entry[ii].id)) maxreturn&=~2;
+
+
+			/* on-device border between OP and userdata differs */
+			if(gptdev->entry[ii].startLBA!=gptkdz->entry[ii].startLBA)
+				if(strcmp(gptdev->entry[ii].name, "userdata")||
+ii<=0||strcmp(gptdev->entry[ii-1].name, "OP")||
+gptdev->entry[ii].startLBA!=gptdev->entry[ii-1].endLBA+1||
+gptkdz->entry[ii].startLBA!=gptkdz->entry[ii-1].endLBA+1) {
+					maxreturn=0;
+					break;
+				}
+
+			if(gptdev->entry[ii].endLBA!=gptkdz->entry[ii].endLBA)
+				if(strcmp(gptdev->entry[ii].name, "OP")||
+ii>=gptdev->head.entryCount-1||strcmp(gptdev->entry[ii+1].name, "userdata")||
+gptdev->entry[ii].endLBA!=gptdev->entry[ii+1].startLBA-1||
+gptkdz->entry[ii].endLBA!=gptkdz->entry[ii+1].startLBA-1) {
+					maxreturn=0;
+					break;
+				}
+		}
+
+		free(gptdev);
+		free(gptkdz);
+
+
+	notfound:
+		/* basically a continue for this loop */
+		;
+	}
+
+	free(buf);
+
+	if(maxreturn>2) maxreturn=2;
+
+	return maxreturn;
+
+abort:
+	/* map will only be non-NULL after mmap(), by which time mlen!=0 */
+	if(buf) free(buf);
+
+	inflateEnd(&zstr);
+
+	return -1;
 }
 
 
@@ -350,7 +687,7 @@ int report_kdzfile(struct kdz_file *kdz)
 
 
 		if(kdz->chunks[i].dz.target_size%blksz) {
-			printf("Block, not a multiple of block size!\n");
+			fprintf(stderr, "Block, not a multiple of block size!\n");
 		}
 
 		cur=0;
