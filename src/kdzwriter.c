@@ -35,16 +35,16 @@ int main(int argc, char **argv)
 	int ret=0;
 	int opt;
 	enum {
-		READ	=0x40,
-		WRITE	=0x80,
-		RW_MASK	=0xF0,
+		TEST	=0x0800,
+		READ	=0x4000,
+		WRITE	=0x8000,
+		EXCL_WRITE=WRITE|0x2000,
+		RW_MASK	=0xF000,
 		REPORT	=READ|0x1,
-		TEST	=READ|0x2,
 		SYSTEM	=WRITE|0x1,
 		MODEM	=WRITE|0x2,
 		KERNEL	=WRITE|0x4,
 		OP	=WRITE|0x8,
-		EXCL_WRITE=WRITE|0x20,
 		BOOTLOADER=EXCL_WRITE|0x1,
 		RESTORE	=EXCL_WRITE|0x2,
 		MODE_MASK=0x0F,
@@ -57,8 +57,7 @@ int main(int argc, char **argv)
 			mode=REPORT;
 			break;
 		case 't':
-			if(mode) goto badmode;
-			mode=TEST;
+			mode|=TEST;
 			break;
 
 		case 's':
@@ -120,7 +119,7 @@ int main(int argc, char **argv)
 "Usage: %s [-trsmOabvqB] <KDZ file>\n"
 "  -h  Help, this message\n" "  -v  Verbose, increase verbosity\n"
 "  -q  Quiet, decrease verbosity\n"
-"  -t  Test, does the KDZ file appear applicable to this device\n"
+"  -t  Test, does the KDZ file appear applicable, simulates writing\n"
 "  -r  Report, list status of KDZ chunks\n"
 "  -a  Apply all, write all areas safe to write from KDZ\n"
 "  -s  System, write system area from KDZ\n"
@@ -143,6 +142,7 @@ int main(int argc, char **argv)
 
 	switch(mode) {
 	case REPORT:
+	case REPORT|TEST:
 		ret=report_kdzfile(kdz);
 		break;
 	case TEST:
