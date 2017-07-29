@@ -767,6 +767,7 @@ bool simulate)
 	uint64_t startLBA=0;
 	int fd=-1;
 	uint64_t blksz;
+	short wrote=0, skip=0;
 
 	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
 		struct gpt_data *gptdev;
@@ -898,12 +899,22 @@ strerror(errno));
 				if(verbose>=3) fprintf(stderr,
 "DEBUG: skipping %lu bytes at %lu (block %lu)\n", blksz, target-offset,
 (target-offset)/blksz);
+				else if(++skip>=512) {
+					skip-=512;
+					putchar('.');
+					fflush(stdout);
+				}
 				continue;
 			}
 
 			if(verbose>=3) fprintf(stderr,
 "DEBUG: writing %lu bytes at %lu (block %lu)\n", blksz, target-offset,
 (target-offset)/blksz);
+			else if(++wrote>=512) {
+				wrote-=512;
+				putchar('o');
+				fflush(stdout);
+			}
 
 			if(!simulate)
 				pwrite64(fd, buf, blksz, target-offset);
@@ -924,6 +935,10 @@ kdz->chunks[i].dz.target_size;
 		if(verbose>=3) fprintf(stderr,
 "DEBUG: discarding %lu bytes (%lu blocks) at %lu (block %lu)\n", range[1],
 range[1]/blksz, range[0], range[0]/blksz);
+		else {
+			putchar('*');
+			fflush(stdout);
+		}
 
 		/* do the deed (sanity check, and not simulating) */
 		if(range[1]>0&&range[1]<((uint64_t)1<<40)&&!simulate)
@@ -940,6 +955,8 @@ range[1]/blksz, range[0], range[0]/blksz);
 abort:
 	if(fd>=0) close(fd);
 	if(buf) free(buf);
+
+	if(verbose<3) putchar('\n');
 
 	return 0;
 }
