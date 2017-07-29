@@ -139,11 +139,9 @@ struct kdz_file *open_kdzfile(const char *filename)
 		goto abort;
 	}
 
-/*
-	if(verbose)
-		printf("%s: DZ file maj=%u, min=%u, dev=\"%s\" chunks=%u\n",
+	if(verbose>=3)
+		fprintf(stderr, "DEBUG: %s: DZ file maj=%u, min=%u, dev=\"%s\" chunks=%u\n",
 __func__, ret->dz_file.major, ret->dz_file.minor, ret->dz_file.device, chunks);
-*/
 
 
 	cur=ret->off;
@@ -169,9 +167,8 @@ __func__, ret->dz_file.major, ret->dz_file.minor, ret->dz_file.device, chunks);
 
 		if((int32_t)ret->chunks[i].dz.device>devs) devs=ret->chunks[i].dz.device;
 
-/*		if(verbose&i)
-			printf("Slice Name: \"%s\"\n", ret->chunks[i].dz.slice_name);
-** */
+		if(verbose>=3)
+			fprintf(stderr, "DEBUG: Slice Name: \"%s\"\n", ret->chunks[i].dz.slice_name);
 
 		cur+=sizeof(struct dz_chunk)+ret->chunks[i].dz.data_size;
 	}
