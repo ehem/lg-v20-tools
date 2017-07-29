@@ -21,6 +21,10 @@
 
 #include <stdio.h>
 #include <getopt.h>
+#include <stdlib.h>
+
+#include <selinux/selinux.h>
+#include <dlfcn.h>
 
 #include "kdz.h"
 #include "md5.h"
@@ -216,5 +220,56 @@ abort:
 	md5_stop();
 
 	return ret;
+}
+
+
+/* wrap the libselinux symbols we need */
+static void *libselinux=NULL;
+
+__typeof__(fgetfilecon) *p_fgetfilecon=NULL;
+__typeof__(fsetfilecon) *p_fsetfilecon=NULL;
+__typeof__(freecon) *p_freecon=NULL;
+#define fgetfilecon (*p_fgetfilecon)
+#define fsetfilecon (*p_fsetfilecon)
+#define freecon (*p_freecon)
+
+
+void libselinux_start(void)
+{
+	int i;
+	struct {
+		void **psym;
+		const char name[16];
+	} syms[]={
+		{(void **)&p_fgetfilecon, "fgetfilecon"},
+		{(void **)&p_fsetfilecon, "fsetfilecon"},
+		{(void **)&p_freecon, "freecon"},
+	};
+
+	if(libselinux) return;
+
+	if(!(libselinux=dlopen("libselinux.so", RTLD_GLOBAL))) {
+		fprintf(stderr, "Failed to dlopen() libselinux.so: %s\n",
+dlerror());
+		exit(-1);
+	}
+
+	for(i=0; i<sizeof(syms)/sizeof(syms[0]); ++i) {
+		if(!(*(syms[i].psym)=dlsym(libselinux, syms[i].name))) {
+			fprintf(stderr, "Failed to resolve \"%s\": %s\n",
+syms[i].name, dlerror());
+			exit(-1);
+		}
+	}
+}
+
+void libselinux_stop(void)
+{
+	if(!libselinux) return;
+
+	dlclose(libselinux);
+	p_fgetfilecon=NULL;
+	p_fsetfilecon=NULL;
+	p_freecon=NULL;
 }
 
