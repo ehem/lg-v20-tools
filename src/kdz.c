@@ -752,58 +752,198 @@ abort:
 }
 
 
-/*
-check in all cases:
-Slice Name: "BackupGPT"
-Slice Name: "PrimaryGPT"
+int write_kdzfile(struct kdz_file *kdz, const char *const slice_name,
+bool simulate)
+{
+	int i, j;
+	int dev;
+	z_stream zstr={
+		.zalloc=zalloc,
+		.zfree=zfree,
+	};
+	MD5_CTX md5;
+	char md5out[16];
+	uint32_t crc;
+	size_t bufsz=0;
+	char *buf=NULL;
+	off64_t offset;
+	uint64_t startLBA=0;
+	int fd=-1;
+	uint64_t blksz;
 
-update:
-Slice Name: "modem"
-Slice Name: "system"  // need to preserve lib/modules if possible
-Slice Name: "OP"
+	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
+		struct gpt_data *gptdev;
+		struct gpt_buf gpt_buf;
 
-expect modified:
-Slice Name: "recovery"
-Slice Name: "recoverybak"
-Slice Name: "boot"
+		/* not the one */
+		if(strcmp(slice_name, kdz->chunks[i].dz.slice_name)) continue;
 
-expect DirtySanta:
-Slice Name: "aboot"
-Slice Name: "abootbak"
+		dev=kdz->chunks[i].dz.device;
 
-worry about:
+		gpt_buf.bufsz=kdz->devs[dev].len;
+		gpt_buf.buf=kdz->devs[dev].map;
 
-Slice Name: "apdp"
-Slice Name: "cust"
-Slice Name: "factory"
-Slice Name: "msadp"
-Slice Name: "persist"
-Slice Name: "rct"
-Slice Name: "sec"
+		blksz=kdz->devs[dev].blksz;
 
-Slice Name: "cmnlib"
-Slice Name: "cmnlib64"
-Slice Name: "cmnlib64bak"
-Slice Name: "cmnlibbak"
-Slice Name: "devcfg"
-Slice Name: "devcfgbak"
-Slice Name: "hyp"
-Slice Name: "hypbak"
-Slice Name: "keymaster"
-Slice Name: "keymasterbak"
-Slice Name: "laf"
-Slice Name: "lafbak"
-Slice Name: "pmic"
-Slice Name: "pmicbak"
-Slice Name: "raw_resources"
-Slice Name: "raw_resourcesbak"
-Slice Name: "rpm"
-Slice Name: "rpmbak"
-Slice Name: "tz"
-Slice Name: "tzbak"
-Slice Name: "xbl"
-Slice Name: "xbl2"
-Slice Name: "xbl2bak"
-Slice Name: "xblbak"
-*/
+		if(!(gptdev=readgptb(gptbuffunc, &gpt_buf, blksz, GPT_ANY))) {
+			fprintf(stderr, "Failed to read GPT from /dev/block/sd%c\n", 'a'+dev);
+			return 0;
+		}
+
+		for(j=0; j<gptdev->head.entryCount-1; ++j) {
+			/* not the one */
+			if(strcmp(slice_name, gptdev->entry[j].name)) continue;
+
+			startLBA=gptdev->entry[j].startLBA;
+			offset=startLBA*blksz;
+
+			break;
+		}
+
+		free(gptdev);
+		/* fail */
+		if(!startLBA) return 0;
+		break;
+	}
+
+	/* fail */
+	if(!startLBA) return 0;
+
+
+	{
+		int flags=O_LARGEFILE;
+		char name[64];
+		if(!simulate) flags|=O_WRONLY;
+		snprintf(name, sizeof(name), "/dev/block/bootdevice/by-name/%s",
+slice_name);
+		if((fd=open(name, flags))<0) {
+			fprintf(stderr, "Failed to open \"%s\": %s", name,
+strerror(errno));
+			return 0;
+		}
+	}
+
+
+	for(; i<=kdz->dz_file.chunk_count; ++i) {
+		uint64_t range[2];
+
+		/* obviously skip other slices */
+		if(strcmp(slice_name, kdz->chunks[i].dz.slice_name)) continue;
+
+		if(dev!=kdz->chunks[i].dz.device) { /* trouble! */
+			fprintf(stderr, "PANIC: \"%s\"'s chunks cross multiple devices?!\n", slice_name);
+			goto abort;
+		}
+
+		if(bufsz<kdz->chunks[i].dz.target_size) {
+			bufsz=kdz->chunks[i].dz.target_size;
+			free(buf);
+			if(!(buf=malloc(bufsz))) {
+				fprintf(stderr, "Memory allocation failure!\n");
+				goto abort;
+			}
+		}
+
+
+		if(kdz->chunks[i].dz.target_size%blksz) {
+			fprintf(stderr, "Block, not a multiple of block size!\n");
+			goto abort;
+		}
+
+
+		(*pMD5_Init)(&md5);
+		crc=crc32(0, Z_NULL, 0);
+
+		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
+		zstr.avail_in=kdz->chunks[i].dz.data_size;
+		if(inflateInit(&zstr)!=Z_OK) {
+			fprintf(stderr, "inflateInit() failed: %s\n", zstr.msg);
+			inflateEnd(&zstr);
+			goto abort;
+		}
+
+
+		zstr.next_out=(unsigned char *)buf;
+		zstr.avail_out=kdz->chunks[i].dz.target_size;
+
+		if(inflate(&zstr, Z_FINISH)!=Z_STREAM_END) {
+			fprintf(stderr, "inflate() failed: %s\n", zstr.msg);
+			inflateEnd(&zstr);
+			goto abort;
+		}
+
+		(*pMD5_Update)(&md5, buf, kdz->chunks[i].dz.target_size);
+		crc=crc32(crc, (Bytef *)buf, kdz->chunks[i].dz.target_size);
+
+		inflateEnd(&zstr);
+
+		(*pMD5_Final)((unsigned char *)md5out, &md5);
+
+		if(crc!=le32toh(kdz->chunks[i].dz.crc32)) {
+			fprintf(stderr, "Chunk %d CRC-32 mismatch!\n", i);
+			goto abort;
+		}
+
+		if(memcmp(md5out, kdz->chunks[i].dz.md5, sizeof(md5out))) {
+			fprintf(stderr, "Chunk %d MD5 mismatch!\n", i);
+			goto abort;
+		}
+
+
+		if(verbose>=3) fprintf(stderr, "DEBUG: chunk %u\n", i);
+
+		/* write the device while trying to keep wear to a minimum */
+		for(j=0; j<kdz->chunks[i].dz.target_size; j+=blksz) {
+			uint64_t target=kdz->chunks[i].dz.target_addr*blksz+j;
+
+			if(!memcmp(buf+j, kdz->devs[dev].map+target, blksz)) {
+
+				if(verbose>=3) fprintf(stderr,
+"DEBUG: skipping %lu bytes at %lu (block %lu)\n", blksz, target-offset,
+(target-offset)/blksz);
+				continue;
+			}
+
+			if(verbose>=3) fprintf(stderr,
+"DEBUG: writing %lu bytes at %lu (block %lu)\n", blksz, target-offset,
+(target-offset)/blksz);
+
+			if(!simulate)
+				pwrite64(fd, buf, blksz, target-offset);
+		}
+
+
+		/* Discard (TRIM) all possible space */
+		/* Note, this is being done on the slice, so slice-relative */
+
+		/* start byte */
+		range[0]=kdz->chunks[i].dz.target_addr*blksz-offset+
+kdz->chunks[i].dz.target_size;
+
+		range[1]=kdz->chunks[i].dz.trim_count*blksz-
+kdz->chunks[i].dz.target_size;
+
+
+		if(verbose>=3) fprintf(stderr,
+"DEBUG: discarding %lu bytes (%lu blocks) at %lu (block %lu)\n", range[1],
+range[1]/blksz, range[0], range[0]/blksz);
+
+		/* do the deed (sanity check, and not simulating) */
+		if(range[1]>0&&range[1]<((uint64_t)1<<40)&&!simulate)
+			ioctl(fd, BLKDISCARD, range);
+	}
+
+	if(fd>=0) close(fd);
+	if(buf) free(buf);
+
+	if(verbose<3) putchar('\n');
+
+	return 1;
+
+abort:
+	if(fd>=0) close(fd);
+	if(buf) free(buf);
+
+	return 0;
+}
 
