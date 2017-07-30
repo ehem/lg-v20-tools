@@ -93,8 +93,8 @@ int main(int argc, char **argv)
 			break;
 
 		case 'a':
-			if(mode) goto badmode;
-			mode=SYSTEM|MODEM;
+			if((mode&READ)||(mode&EXCL_WRITE)==EXCL_WRITE) goto badmode;
+			mode|=SYSTEM|MODEM;
 			break;
 
 		case 'b':
