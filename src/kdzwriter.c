@@ -46,6 +46,7 @@ static int write_kmods(struct kmod_file *kmod, bool simulate);
 int main(int argc, char **argv)
 {
 	struct kdz_file *kdz;
+	struct kmod_file *kmods;
 	int ret=0;
 	int opt;
 	enum {
@@ -139,7 +140,8 @@ int main(int argc, char **argv)
 "  -s  System, write system area from KDZ\n"
 "  -m  Modem, write modem area from KDZ\n"
 "  -O  OP, write OP area from KDZ\n"
-"  -k  Kernel, write kernel/boot area from KDZ\n"
+"  -k  Kernel, write kernel/boot area from KDZ; need to restore system at\n"
+"      same time, or else be prepared to install new kernel immediately!\n"
 "  -b  Bootloader, write bootloader from KDZ; USED FOR RETURNING TO STOCK!\n"
 "Only one of -t, -r, -a, or -b is allowed.  -s, -m, -k, and -O may be used \n"
 "together, but they exclude the prior options.\n", argv[0]);
@@ -207,16 +209,47 @@ int main(int argc, char **argv)
 			}
 
 			if((mode&SYSTEM)==SYSTEM) {
-				printf("Write system (to be implemented)\n");
+				printf("Begining rewrite of system area%s\n",
+mode&TEST?" (simulated)":"");
+				if((mode&KERNEL)!=KERNEL) {
+					if(!(kmods=read_kmods())) {
+						fprintf(stderr,
+"%s: Failed while reading kernel modules\n", argv[0]);
+						ret=64;
+						goto abort;
+					}
+				}
+				if(!write_kdzfile(kdz, "system", mode&TEST?1:0)) {
+					fprintf(stderr,
+"%s: Failed while writing /system, major problem, PANIC!\n", argv[0]);
+					ret=7;
+				}
+				if((mode&KERNEL)!=KERNEL) {
+					if(!write_kmods(kmods, mode&TEST?1:0)) {
+						fprintf(stderr,
+"%s: Failed while restoring kernel modules, recommend kernel reinstall!\n",
+argv[0]);
+						ret=1;
+					}
+				}
+				printf("Finished rewrite of system area%s\n",
+mode&TEST?" (simulated)":"");
 			}
 			if((mode&MODEM)==MODEM) {
-				printf("Write modem (to be implemented)\n");
+				printf("Begining rewrite of modem area%s\n",
+mode&TEST?" (simulated)":"");
+				write_kdzfile(kdz, "modem", mode&TEST?1:0);
+				printf("Finished rewrite of modem area%s\n",
+mode&TEST?" (simulated)":"");
 			}
 			if((mode&OP)==OP) {
 				printf("Write OP (to be implemented)\n");
 			}
 			if((mode&KERNEL)==KERNEL) {
-				printf("Write kernel/boot (to be implemented)\n");
+				printf("Begining reinstall of stock kernel/boot%s\n", mode&TEST?" (simulated)":"");
+				write_kdzfile(kdz, "boot", mode&TEST?1:0);
+				printf("Finished reinstall of boot area%s\n",
+mode&TEST?" (simulated)":"");
 			}
 		} else {
 			ret=1;
