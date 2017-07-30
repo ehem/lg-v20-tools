@@ -809,14 +809,19 @@ bool simulate)
 
 
 	{
-		int flags=O_LARGEFILE;
+		/* on Linux O_EXCL refuses if mounted */
+		int flags=O_LARGEFILE|O_EXCL;
 		char name[64];
 		if(!simulate) flags|=O_WRONLY;
 		snprintf(name, sizeof(name), "/dev/block/bootdevice/by-name/%s",
 slice_name);
+
 		if((fd=open(name, flags))<0) {
-			fprintf(stderr, "Failed to open \"%s\": %s", name,
-strerror(errno));
+			const char *fmt;
+			if(errno==EBUSY) fmt="Device to write, \"%s\" mounted, refusing to continue\n";
+			else fmt="Failed to open \"%s\": %s";
+
+			fprintf(stderr, fmt, name, strerror(errno));
 			return 0;
 		}
 	}
