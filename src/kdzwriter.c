@@ -19,9 +19,15 @@
 ************************************************************************/
 
 
+#define _LARGEFILE64_SOURCE
+
 #include <stdio.h>
 #include <getopt.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/mount.h>
 
 #include <selinux/selinux.h>
 #include <dlfcn.h>
@@ -31,6 +37,10 @@
 
 
 int verbose=0;
+
+
+static struct kmod_file *read_kmods(void);
+static int write_kmods(struct kmod_file *kmod, bool simulate);
 
 
 int main(int argc, char **argv)
@@ -271,5 +281,285 @@ void libselinux_stop(void)
 	p_fgetfilecon=NULL;
 	p_fsetfilecon=NULL;
 	p_freecon=NULL;
+}
+
+
+
+struct kmod_file {
+	struct kmod_file *next;	/* next kmod file */
+	struct stat64 stat;	/* our stat */
+	char *secon;		/* SE Linux context */
+	char *buf;		/* our file contents */
+	char name[];		/* filename */
+};
+
+static struct kmod_file *read_kmods(void)
+{
+	struct kmod_file *ret=NULL, **pcur=&ret;
+	DIR *dir=NULL;
+	struct dirent64 *entry;
+	int fd=-1;
+
+	libselinux_start();
+
+	/* hopefully not mounted, but make sure */
+	umount2("/system", MNT_DETACH);
+
+	if(mount("/dev/block/bootdevice/by-name/system", "/system",
+"ext4", MS_RDONLY, "discard")) {
+		fprintf(stderr, "Failed mounting system for kmod saving: %s\n",
+strerror(errno));
+		goto abort;
+	}
+
+	if(!(dir=opendir("/system/lib/modules"))) {
+		fprintf(stderr, "Error while opening module directory: %s\n",
+strerror(errno));
+		goto abort;
+	}
+
+	if(fchdir(dirfd(dir))) {
+		fprintf(stderr, "Unable to move to module directory: %s\n",
+strerror(errno));
+		goto abort;
+	}
+
+	while((entry=readdir64(dir))) {
+		struct kmod_file *cur;
+
+		/* need to skip self and parent directories */
+		if(entry->d_name[0]=='.'&&(entry->d_name[1]=='\0'||
+(entry->d_name[1]=='.'&&entry->d_name[2]=='\0')))
+			continue;
+
+		if(entry->d_type!=DT_REG) {
+			fprintf(stderr, "Non-regular file \"%s\" in kernel module directory! (d_type=%d)\n",
+entry->d_name, (int)entry->d_type);
+			goto abort;
+		}
+
+		if(!(cur=malloc(sizeof(struct kmod_file)+strlen(entry->d_name)+1))) {
+			fprintf(stderr, "Memory allocation failure\n");
+			goto abort;
+		}
+
+		*pcur=cur;
+		pcur=&cur->next;
+		cur->next=NULL;
+		cur->buf=NULL;
+		cur->secon=NULL;
+
+		strcpy(cur->name, entry->d_name);
+
+		if(!(fd=open(entry->d_name, O_RDONLY|O_LARGEFILE|O_NOATIME))) {
+			fprintf(stderr, "Unable to load module \"%s\": %s",
+entry->d_name, strerror(errno));
+			goto abort;
+		}
+
+		if(fstat64(fd, &cur->stat)) {
+			fprintf(stderr, "fstat(\"%s\") failed: %s\n",
+entry->d_name, strerror(errno));
+			goto abort;
+		}
+
+		if(fgetfilecon(fd, &cur->secon)<0) {
+			fprintf(stderr,
+"Unable to get SE Linux context for \"%s\": %s\n", entry->d_name,
+strerror(errno));
+			goto abort;
+		}
+
+		if(!(cur->buf=malloc(cur->stat.st_size))) {
+			fprintf(stderr, "Memory allocation failure\n");
+			goto abort;
+		}
+
+		if(read(fd, cur->buf, cur->stat.st_size)!=cur->stat.st_size) {
+			fprintf(stderr, "Failed while read()ing \"%s\": %s\n",
+entry->d_name, strerror(errno));
+			goto abort;
+		}
+
+		if(close(fd)) {
+			fprintf(stderr, "Failure while close()ing \"%s\": %s\n",
+entry->d_name, strerror(errno));
+			goto abort;
+		}
+	}
+
+	if(closedir(dir)) {
+		fprintf(stderr, "Error while closing module directory?\n");
+		goto abort;
+	}
+
+	chdir("/");
+
+	/* failure here is problematic since we would be writing a mounted FS */
+	if(umount("/system")) {
+		fprintf(stderr, "Failed during unmount of /system: %s\n",
+strerror(errno));
+		goto abort;
+	}
+
+	return ret;
+
+
+abort:
+	if(fd>=0) close(fd);
+
+	if(dir) closedir(dir);
+
+	while(ret) {
+		struct kmod_file *tmp=ret;
+		ret=ret->next;
+		if(tmp->buf) free(tmp->buf);
+		if(tmp->secon) freecon(tmp->secon);
+		free(tmp);
+	}
+
+	chdir("/");
+
+	/* either this suceeds, or dunno */
+	umount("/system");
+
+	return NULL;
+}
+
+
+static int write_kmods(struct kmod_file *kmod, bool simulate)
+{
+	int fd=-1;
+
+	if(!simulate) {
+		if(mount("/dev/block/bootdevice/by-name/system", "/system",
+"ext4", MS_PRIVATE|MS_NOATIME, "discard")) {
+			fprintf(stderr, "Failed mounting system for kmod restoring: %s\n",
+strerror(errno));
+			goto abort;
+		}
+
+		chdir("/system/lib/modules");
+	} else {
+		struct stat st;
+
+		if(lstat("/modules", &st)) {
+			if(errno!=ENOENT) {
+				fprintf(stderr, "Bad return from lstat(\"/modules\"): %s\n",
+strerror(errno));
+				goto abort;
+			}
+		} else if(!S_ISDIR(st.st_mode)) {
+			fprintf(stderr, "\"/modules\" exists and is not a directory!\n");
+			goto abort;
+		}
+
+		/* we *really* don't want to be writing anywhere */
+		if(umount2("/modules", MNT_DETACH)&&errno!=EINVAL&&
+errno!=ENOENT) {
+			fprintf(stderr, "Unable to unmount(\"/modules\"): %s\n",
+strerror(errno));
+			goto abort;
+		}
+
+		/* this is okay to fail */
+		mkdir("/modules", 0755);
+
+		if(chdir("/modules")) {
+			fprintf(stderr, "Failed to chdir(\"/modules\"): %s\n",
+strerror(errno));
+			goto abort;
+		}
+	}
+
+	while(kmod) {
+		struct kmod_file *next=kmod->next;
+		struct timespec times[2];
+		bool restperm=simulate;
+
+		/* newer kernel didn't have module, worrisome... */
+		if((fd=open(kmod->name, O_WRONLY|O_LARGEFILE|O_NOFOLLOW|O_CREAT|O_EXCL, kmod->stat.st_mode&07777))>=0)
+			restperm=1;
+		else if(errno!=EEXIST||
+(fd=open(kmod->name, O_WRONLY|O_LARGEFILE|O_NOFOLLOW))<0) {
+			fprintf(stderr,
+"Failed while open()ing \"%s\" for writing: %s\n", kmod->name, strerror(errno));
+			goto abort;
+		}
+
+		if(ftruncate(fd, kmod->stat.st_size)) {
+			fprintf(stderr, "ftruncate(\"%s\") failure: %s\n",
+kmod->name, strerror(errno));
+			goto abort;
+		}
+
+		if(write(fd, kmod->buf, kmod->stat.st_size)!=kmod->stat.st_size) {
+			fprintf(stderr, "Failure while write()ing \"%s\": %s\n",
+kmod->name, strerror(errno));
+			goto abort;
+		}
+
+#if 1
+if(restperm) {
+		/* do we actually want to restore these? */
+
+		if(fchown(fd, kmod->stat.st_uid, kmod->stat.st_gid)) {
+			fprintf(stderr, "chmod(\"%s\") failure: %s\n",
+kmod->name, strerror(errno));
+			goto abort;
+		}
+
+		if(fsetfilecon(fd, kmod->secon)) {
+			fprintf(stderr, "fsetfilecon(\"%s\") failure: %s\n",
+kmod->name, strerror(errno));
+			goto abort;
+		}
+
+		times[0]=kmod->stat.st_atim;
+		times[1]=kmod->stat.st_mtim;
+
+		if(futimens(fd, times)) {
+			fprintf(stderr, "futimens(\"%s\") failure: %s\n",
+kmod->name, strerror(errno));
+			goto abort;
+		}
+}
+#endif
+
+		free(kmod->buf);
+		freecon(kmod->secon);
+		free(kmod);
+		kmod=next;
+	}
+
+	if(!simulate) {
+		if(umount("/system")) {
+			fprintf(stderr, "Failure while unmounting \"/system\": %s\n",
+strerror(errno));
+			goto abort;
+		}
+	}
+
+	libselinux_stop();
+
+	return 1;
+
+abort:
+	/* not much we can do in case of cascading errors */
+	if(!simulate) umount2("/modules", MNT_DETACH);
+
+	if(fd>=0) close(fd);
+
+	while(kmod) {
+		struct kmod_file *next=kmod->next;
+		free(kmod->buf);
+		freecon(kmod->secon);
+		free(kmod);
+		kmod=next;
+	}
+
+	libselinux_stop();
+
+	return 0;
 }
 
