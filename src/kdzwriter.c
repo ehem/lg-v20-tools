@@ -69,8 +69,8 @@ int main(int argc, char **argv)
 	while((opt=getopt(argc, argv, "trsmkOabvqMBhH?"))>=0) {
 		switch(opt) {
 		case 'r':
-			if(mode) goto badmode;
-			mode=REPORT;
+			if(mode&~TEST) goto badmode;
+			mode|=REPORT;
 			break;
 		case 't':
 			mode|=TEST;
@@ -101,8 +101,8 @@ int main(int argc, char **argv)
 			break;
 
 		case 'b':
-			if(mode) goto badmode;
-			mode=BOOTLOADER;
+			if(mode&~TEST) goto badmode;
+			mode|=BOOTLOADER;
 			break;
 
 		badmode:
@@ -183,6 +183,7 @@ int main(int argc, char **argv)
 		}
 		break;
 	case RESTORE:
+	case RESTORE|TEST:
 		if(test_kdzfile(kdz)<2) {
 			fprintf(stderr,
 "%s: This KDZ file is an insufficiently good match for this device,\n"
@@ -193,6 +194,7 @@ int main(int argc, char **argv)
 		printf("Write everything (to be implemented)\n");
 		break;
 	case BOOTLOADER:
+	case BOOTLOADER|TEST:
 		if(test_kdzfile(kdz)<2) {
 			fprintf(stderr,
 "%s: This KDZ file is an insufficiently good match for this device,\n"
