@@ -818,7 +818,7 @@ slice_name);
 
 		if((fd=open(name, flags))<0) {
 			const char *fmt;
-			if(errno==EBUSY) fmt="Device to write, \"%s\" mounted, refusing to continue\n";
+			if(errno==EBUSY) fmt="\"%s\" mounted, refusing to continue\n";
 			else fmt="Failed to open \"%s\": %s";
 
 			fprintf(stderr, fmt, name, strerror(errno));
@@ -922,7 +922,7 @@ slice_name);
 			}
 
 			if(!simulate)
-				pwrite64(fd, buf, blksz, target-offset);
+				pwrite64(fd, buf+j, blksz, target-offset);
 		}
 
 
