@@ -64,8 +64,9 @@ int main(int argc, char **argv)
 		RESTORE	=EXCL_WRITE|0x2,
 		MODE_MASK=0x0F,
 	} mode=0;
+	bool savekmods=1;
 
-	while((opt=getopt(argc, argv, "trsmkOabvqBhH?"))>=0) {
+	while((opt=getopt(argc, argv, "trsmkOabvqMBhH?"))>=0) {
 		switch(opt) {
 		case 'r':
 			if(mode) goto badmode;
@@ -86,6 +87,8 @@ int main(int argc, char **argv)
 		case 'k':
 			if((mode&READ)||(mode&EXCL_WRITE)==EXCL_WRITE) goto badmode;
 			mode|=KERNEL;
+		case 'M':
+			savekmods=0;
 			break;
 		case 'O':
 			if((mode&READ)||(mode&EXCL_WRITE)==EXCL_WRITE) goto badmode;
@@ -138,6 +141,7 @@ int main(int argc, char **argv)
 "  -r  Report, list status of KDZ chunks\n"
 "  -a  Apply all, write all areas safe to write from KDZ\n"
 "  -s  System, write system area from KDZ\n"
+"  -M  Do NOT attempt to preserve old kernel modules\n"
 "  -m  Modem, write modem area from KDZ\n"
 "  -O  OP, write OP area from KDZ\n"
 "  -k  Kernel, write kernel/boot area from KDZ; need to restore system at\n"
@@ -211,26 +215,22 @@ int main(int argc, char **argv)
 			if((mode&SYSTEM)==SYSTEM) {
 				printf("Begining rewrite of system area%s\n",
 mode&TEST?" (simulated)":"");
-				if((mode&KERNEL)!=KERNEL) {
-					if(!(kmods=read_kmods())) {
-						fprintf(stderr,
+				if(savekmods&&!(kmods=read_kmods())) {
+					fprintf(stderr,
 "%s: Failed while reading kernel modules\n", argv[0]);
-						ret=64;
-						goto abort;
-					}
+					ret=64;
+					goto abort;
 				}
 				if(!write_kdzfile(kdz, "system", mode&TEST?1:0)) {
 					fprintf(stderr,
 "%s: Failed while writing /system, major problem, PANIC!\n", argv[0]);
 					ret=7;
 				}
-				if((mode&KERNEL)!=KERNEL) {
-					if(!write_kmods(kmods, mode&TEST?1:0)) {
-						fprintf(stderr,
+				if(savekmods&&!write_kmods(kmods, mode&TEST?1:0)) {
+					fprintf(stderr,
 "%s: Failed while restoring kernel modules, recommend kernel reinstall!\n",
 argv[0]);
-						ret=1;
-					}
+					ret=1;
 				}
 				printf("Finished rewrite of system area%s\n",
 mode&TEST?" (simulated)":"");
