@@ -28,6 +28,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
+#include <sys/time.h>
 
 #include <selinux/selinux.h>
 #include <dlfcn.h>
@@ -523,16 +524,20 @@ strerror(errno));
 	while(kmod) {
 		struct kmod_file *next=kmod->next;
 		struct timespec times[2];
-		bool restperm=simulate;
+		struct timeval tval;
+		struct stat64 sbuf, *pstat;
 
 		/* newer kernel didn't have module, worrisome... */
 		if((fd=open(kmod->name, O_WRONLY|O_LARGEFILE|O_NOFOLLOW|O_CREAT|O_EXCL, kmod->stat.st_mode&07777))>=0)
-			restperm=1;
+			pstat=&kmod->stat;
 		else if(errno!=EEXIST||
 (fd=open(kmod->name, O_WRONLY|O_LARGEFILE|O_NOFOLLOW))<0) {
 			fprintf(stderr,
 "Failed while open()ing \"%s\" for writing: %s\n", kmod->name, strerror(errno));
 			goto abort;
+		} else {
+			fstat64(fd, &sbuf);
+			pstat=&sbuf;
 		}
 
 		if(ftruncate(fd, kmod->stat.st_size)) {
@@ -547,10 +552,9 @@ kmod->name, strerror(errno));
 			goto abort;
 		}
 
-#if 1
-if(restperm) {
-		/* do we actually want to restore these? */
 
+
+		/* do we actually want to restore these? */
 		if(fchown(fd, kmod->stat.st_uid, kmod->stat.st_gid)) {
 			fprintf(stderr, "chmod(\"%s\") failure: %s\n",
 kmod->name, strerror(errno));
@@ -563,16 +567,22 @@ kmod->name, strerror(errno));
 			goto abort;
 		}
 
-		times[0]=kmod->stat.st_atim;
-		times[1]=kmod->stat.st_mtim;
+
+		/* this is how you effect ctime */
+		tval.tv_sec=pstat->st_ctim.tv_sec;
+		tval.tv_usec=pstat->st_ctim.tv_nsec/1000;
+		settimeofday(&tval, NULL);
+
+		times[0]=pstat->st_atim;
+		times[1]=pstat->st_mtim;
 
 		if(futimens(fd, times)) {
 			fprintf(stderr, "futimens(\"%s\") failure: %s\n",
 kmod->name, strerror(errno));
 			goto abort;
 		}
-}
-#endif
+
+
 
 		free(kmod->buf);
 		freecon(kmod->secon);
