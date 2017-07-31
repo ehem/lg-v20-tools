@@ -160,6 +160,19 @@ int main(int argc, char **argv)
 		goto abort;
 	}
 
+
+	/* one final warning before doing the deed */
+	if(mode&WRITE&&!(mode&TEST)) {
+		int count=10;
+		printf("Preparing active write operation, are you sure?\n");
+
+		do {
+			printf("%d seconds %c", count, count?'\r':'\n');
+			fflush(stdout);
+			sleep(1);
+		} while(count--);
+	}
+
 	switch(mode) {
 	case REPORT:
 	case REPORT|TEST:
