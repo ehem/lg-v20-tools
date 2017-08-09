@@ -482,7 +482,7 @@ static int write_kmods(struct kmod_file *kmod, bool simulate)
 
 	if(!simulate) {
 		if(mount("/dev/block/bootdevice/by-name/system", "/system",
-"ext4", MS_PRIVATE|MS_NOATIME, "discard")) {
+"ext4", MS_NOATIME, "discard")) {
 			fprintf(stderr, "Failed mounting system for kmod restoring: %s\n",
 strerror(errno));
 			goto abort;
