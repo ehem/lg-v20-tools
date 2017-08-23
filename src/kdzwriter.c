@@ -54,21 +54,24 @@ int main(int argc, char **argv)
 		TEST	=0x0800,
 		READ	=0x4000,
 		WRITE	=0x8000,
+		SHAR_WRITE=WRITE|0x1000,
 		EXCL_WRITE=WRITE|0x2000,
 		RW_MASK	=0xF000,
 		REPORT	=READ|0x1,
-		SYSTEM	=WRITE|0x1,
-		MODEM	=WRITE|0x2,
-		KERNEL	=WRITE|0x4,
-		OP	=WRITE|0x8,
+		SYSTEM	=SHAR_WRITE|0x01,
+		MODEM	=SHAR_WRITE|0x02,
+		KERNEL	=SHAR_WRITE|0x04,
+		CUST	=SHAR_WRITE|0x08,
+		OP	=SHAR_WRITE|0x10,
 		BOOTLOADER=EXCL_WRITE|0x1,
 		RESTORE	=EXCL_WRITE|0x2,
 		MODE_MASK=0x0F,
 	} mode=0;
 	bool savekmods=1;
 
-	while((opt=getopt(argc, argv, "trsmkOabvqMBhH?"))>=0) {
+	while((opt=getopt(argc, argv, "trsmckOabvqMBhH?"))>=0) {
 		switch(opt) {
+			int modecnt;
 		case 'r':
 			if(mode&~TEST) goto badmode;
 			mode|=REPORT;
@@ -78,33 +81,39 @@ int main(int argc, char **argv)
 			break;
 
 		case 's':
-			if((mode&READ)||(mode&EXCL_WRITE)==EXCL_WRITE) goto badmode;
 			mode|=SYSTEM;
-			break;
+			goto check_mode;
 		case 'm':
-			if((mode&READ)||(mode&EXCL_WRITE)==EXCL_WRITE) goto badmode;
 			mode|=MODEM;
-			break;
+			goto check_mode;
+		case 'c':
+			mode|=CUST;
+			goto check_mode;
 		case 'k':
-			if((mode&READ)||(mode&EXCL_WRITE)==EXCL_WRITE) goto badmode;
 			mode|=KERNEL;
 		case 'M':
 			savekmods=0;
-			break;
+			goto check_mode;
 		case 'O':
-			if((mode&READ)||(mode&EXCL_WRITE)==EXCL_WRITE) goto badmode;
 			mode|=OP;
-			break;
+			goto check_mode;
 
 		case 'a':
-			if((mode&READ)||(mode&EXCL_WRITE)==EXCL_WRITE) goto badmode;
-			mode|=SYSTEM|MODEM;
-			break;
+			mode|=SYSTEM|MODEM|CUST;
+			goto check_mode;
 
 		case 'b':
 			if(mode&~TEST) goto badmode;
 			mode|=BOOTLOADER;
 			break;
+
+		check_mode:
+			modecnt=0;
+			if(mode&READ) ++modecnt;
+			if((mode&SHAR_WRITE)==SHAR_WRITE) ++modecnt;
+			if((mode&EXCL_WRITE)==EXCL_WRITE) ++modecnt;
+
+			if(modecnt<=1) break;
 
 		badmode:
 			fprintf(stderr, "Multiple incompatible modes have been selected, cannot continue!\n");
@@ -144,6 +153,7 @@ int main(int argc, char **argv)
 "  -s  System, write system area from KDZ\n"
 "  -M  Do NOT attempt to preserve old kernel modules\n"
 "  -m  Modem, write modem area from KDZ\n"
+"  -c  Cust, write area appearing to effect VoLTE from KDZ\n"
 "  -O  OP, write OP area from KDZ\n"
 "  -k  Kernel, write kernel/boot area from KDZ; need to restore system at\n"
 "      same time, or else be prepared to install new kernel immediately!\n"
@@ -256,6 +266,13 @@ mode&TEST?" (simulated)":"");
 mode&TEST?" (simulated)":"");
 				write_kdzfile(kdz, "modem", mode&TEST?1:0);
 				printf("Finished rewrite of modem area%s\n",
+mode&TEST?" (simulated)":"");
+			}
+			if((mode&CUST)==CUST) {
+				printf("Begining rewrite of cust area%s\n",
+mode&TEST?" (simulated)":"");
+				write_kdzfile(kdz, "cust", mode&TEST?1:0);
+				printf("Finished rewrite of cust area%s\n",
 mode&TEST?" (simulated)":"");
 			}
 			if((mode&OP)==OP) {
