@@ -302,6 +302,60 @@ off64_t offset)
 	return count;
 }
 
+
+static int zwrapper(z_streamp dst, int chunk, const char *chunkname, int flush)
+{
+	int ret=Z_OK;
+
+	if(!dst->total_in&&(ret=inflateInit(dst))!=Z_OK) {
+		fprintf(stderr, "inflateInit() failed: %s\n", dst->msg);
+		inflateEnd(dst);
+		return ret;
+	}
+
+	if(flush>Z_ERRNO) do {
+	restart:
+
+		switch(ret=inflate(dst, flush)) {
+		case Z_OK:
+			if(flush==Z_FINISH) goto restart;
+		case Z_STREAM_END:
+			break;
+		case Z_BUF_ERROR:
+			if(flush!=Z_FINISH) break;
+		default:
+			fprintf(stderr,
+"Chunk %d(%s): inflate() failed: %s\n", chunk, chunkname, dst->msg);
+			if(verbose>=3) fprintf(stderr,
+"DEBUG: inflate()=%d, @ %lu bytes of input, %lu bytes of output\n", ret,
+dst->total_in, dst->total_out);
+
+			return ret;
+
+		}
+
+	} while(dst->avail_out);
+
+	if(flush==Z_FINISH&&ret!=Z_STREAM_END) {
+		if((ret=inflate(dst, Z_FINISH))!=Z_STREAM_END) {
+			fprintf(stderr,
+"Chunk %d(%s): inflate failed to finish stream: %s\n", chunk, chunkname,
+dst->msg);
+			if(verbose>=3) fprintf(stderr,
+"DEBUG: inflate()=%d, @ %lu bytes of input, %lu bytes of output\n", ret,
+dst->total_in, dst->total_out);
+
+			/* this is odd, and bad */
+			ret=Z_ERRNO;
+		}
+	}
+
+	if(ret==Z_STREAM_END||flush<=Z_ERRNO) inflateEnd(dst);
+
+	return ret;
+}
+
+
 int test_kdzfile(struct kdz_file *kdz)
 {
 	int i;
@@ -319,6 +373,7 @@ int test_kdzfile(struct kdz_file *kdz)
 	uint32_t bufsz=0;
 	int maxreturn=3;
 	struct gpt_buf gpt_buf;
+	int zres=Z_OK;
 
 	for(i=1; i<=kdz->dz_file.chunk_count&&maxreturn>0; ++i) {
 		const char *slice_name=kdz->chunks[i].dz.slice_name;
@@ -398,11 +453,7 @@ int test_kdzfile(struct kdz_file *kdz)
 
 		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
 		zstr.avail_in=kdz->chunks[i].dz.data_size;
-		if(inflateInit(&zstr)!=Z_OK) {
-			fprintf(stderr, "inflateInit() failed: %s\n", zstr.msg);
-			inflateEnd(&zstr);
-			goto abort;
-		}
+		zstr.total_in=zstr.total_out=0;
 
 		if(kdz->chunks[i].dz.target_size%blksz) {
 			fprintf(stderr, "Block, not a multiple of block size!\n");
@@ -417,15 +468,12 @@ int test_kdzfile(struct kdz_file *kdz)
 			zstr.next_out=(unsigned char *)buf;
 			zstr.avail_out=cmp;
 
-			switch(inflate(&zstr, Z_SYNC_FLUSH)) {
+			switch(zres=zwrapper(&zstr, i,
+kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
 			case Z_OK:
-				break;
 			case Z_STREAM_END:
 				break;
 			default:
-				printf("Chunk %d(%s): inflate() failed: %s\n",
-i, kdz->chunks[i].dz.slice_name, zstr.msg);
-
 				goto abort;
 			}
 
@@ -439,7 +487,11 @@ memcmp(map+kdz->chunks[i].dz.target_addr*blksz+cur, buf, cmp)) mismatch=1;
 			cur+=cmp;
 		}
 
-		inflateEnd(&zstr);
+		if(zres!=Z_STREAM_END&&zwrapper(&zstr, i,
+kdz->chunks[i].dz.slice_name, Z_FINISH)!=Z_STREAM_END) {
+			zres=Z_STREAM_END; /* already refused */
+			goto abort;
+		}
 
 		(*pMD5_Final)((unsigned char *)md5out, &md5);
 
@@ -465,11 +517,7 @@ memcmp(map+kdz->chunks[i].dz.target_addr*blksz+cur, buf, cmp)) mismatch=1;
 
 		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
 		zstr.avail_in=kdz->chunks[i].dz.data_size;
-		if(inflateInit(&zstr)!=Z_OK) {
-			fprintf(stderr, "inflateInit() failed: %s\n", zstr.msg);
-			inflateEnd(&zstr);
-			goto abort;
-		}
+		zstr.total_in=zstr.total_out=0;
 
 		if(kdz->chunks[i].dz.target_addr<=3) gpt_type=GPT_PRIMARY;
 		else {
@@ -482,13 +530,12 @@ memcmp(map+kdz->chunks[i].dz.target_addr*blksz+cur, buf, cmp)) mismatch=1;
 				if(zstr.avail_out>bufsz) zstr.avail_out=bufsz;
 
 
-				switch(inflate(&zstr, Z_SYNC_FLUSH)) {
+				switch(zres=zwrapper(&zstr, i,
+kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
 				case Z_OK:
+				case Z_STREAM_END:
 					break;
 				default:
-					printf("Chunk %d(%s): inflate() failed: %s\n",
-i, kdz->chunks[i].dz.slice_name, zstr.msg);
-
 					goto abort;
 				}
 			}
@@ -497,19 +544,8 @@ i, kdz->chunks[i].dz.slice_name, zstr.msg);
 		zstr.next_out=(unsigned char *)buf;
 		zstr.avail_out=bufsz;
 
-		switch(inflate(&zstr, Z_SYNC_FLUSH)) {
-		case Z_OK:
-			break;
-		case Z_STREAM_END:
-			break;
-		default:
-			printf("Chunk %d(%s): inflate() failed: %s\n",
-i, kdz->chunks[i].dz.slice_name, zstr.msg);
-
-			goto abort;
-		}
-
-		inflateEnd(&zstr);
+		if((zres=zwrapper(&zstr, i,
+kdz->chunks[i].dz.slice_name, Z_FINISH))!=Z_STREAM_END) goto abort;
 
 
 		/* load the corresponding device GPT */
@@ -623,7 +659,7 @@ abort:
 	/* map will only be non-NULL after mmap(), by which time mlen!=0 */
 	if(buf) free(buf);
 
-	inflateEnd(&zstr);
+	if(zres!=Z_STREAM_END) zwrapper(&zstr, 0, "aborting", Z_FINISH);
 
 	return -1;
 }
@@ -646,6 +682,7 @@ int report_kdzfile(struct kdz_file *kdz)
 	uint32_t bufsz=0;
 	uint32_t cur;
 	uint32_t mismatch;
+	int zres=Z_OK;
 
 	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
 		const char *fmt;
@@ -673,11 +710,7 @@ int report_kdzfile(struct kdz_file *kdz)
 
 		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
 		zstr.avail_in=kdz->chunks[i].dz.data_size;
-		if(inflateInit(&zstr)!=Z_OK) {
-			fprintf(stderr, "inflateInit() failed: %s\n", zstr.msg);
-			inflateEnd(&zstr);
-			goto abort;
-		}
+		zstr.total_in=zstr.total_out=0;
 
 		mismatch=0;
 
@@ -690,19 +723,17 @@ int report_kdzfile(struct kdz_file *kdz)
 		cur=0;
 
 		while(cur<kdz->chunks[i].dz.target_size) {
+			int zres;
 
 			zstr.next_out=(unsigned char *)buf;
 			zstr.avail_out=bufsz;
 
-			switch(inflate(&zstr, Z_SYNC_FLUSH)) {
+			switch(zres=zwrapper(&zstr, i,
+kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
 			case Z_OK:
-				break;
 			case Z_STREAM_END:
 				break;
 			default:
-				printf("Chunk %d(%s): inflate() failed: %s\n",
-i, kdz->chunks[i].dz.slice_name, zstr.msg);
-
 				goto abort_block;
 			}
 
@@ -733,7 +764,7 @@ kdz->chunks[i].dz.target_addr+kdz->chunks[i].dz.trim_count,
 kdz->chunks[i].dz.trim_count, mismatch);
 
 	abort_block:
-		inflateEnd(&zstr);
+		zwrapper(&zstr, 0, "aborting", Z_ERRNO);
 	}
 
 	free(buf);
@@ -743,7 +774,7 @@ kdz->chunks[i].dz.trim_count, mismatch);
 abort:
 	if(buf) free(buf);
 
-	inflateEnd(&zstr);
+	if(zres!=Z_STREAM_END) zwrapper(&zstr, 0, "aborting", Z_ERRNO);
 
 	return 128;
 }
@@ -768,6 +799,7 @@ bool simulate)
 	int fd=-1;
 	uint64_t blksz;
 	short wrote=0, skip=0;
+	int zres=Z_OK;
 
 	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
 		struct gpt_data *gptdev;
@@ -859,26 +891,18 @@ slice_name);
 
 		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
 		zstr.avail_in=kdz->chunks[i].dz.data_size;
-		if(inflateInit(&zstr)!=Z_OK) {
-			fprintf(stderr, "inflateInit() failed: %s\n", zstr.msg);
-			inflateEnd(&zstr);
-			goto abort;
-		}
+		zstr.total_in=zstr.total_out=0;
 
 
 		zstr.next_out=(unsigned char *)buf;
 		zstr.avail_out=kdz->chunks[i].dz.target_size;
 
-		if(inflate(&zstr, Z_FINISH)!=Z_STREAM_END) {
-			fprintf(stderr, "inflate() failed: %s\n", zstr.msg);
-			inflateEnd(&zstr);
-			goto abort;
-		}
+		if((zres=zwrapper(&zstr, i, slice_name,
+Z_FINISH))!=Z_STREAM_END) goto abort;
 
 		(*pMD5_Update)(&md5, buf, kdz->chunks[i].dz.target_size);
 		crc=crc32(crc, (Bytef *)buf, kdz->chunks[i].dz.target_size);
 
-		inflateEnd(&zstr);
 
 		(*pMD5_Final)((unsigned char *)md5out, &md5);
 
