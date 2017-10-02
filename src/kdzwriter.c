@@ -230,7 +230,7 @@ int main(int argc, char **argv)
 		break;
 	default:
 		if((mode&WRITE)==WRITE) {
-			if(!test_kdzfile(kdz)) {
+			if(test_kdzfile(kdz)<=0) {
 				fprintf(stderr,
 "%s: This KDZ file does not appear to be applicable to this device,\n"
 "abandoning operation!\n", argv[0]);
