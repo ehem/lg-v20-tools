@@ -601,11 +601,20 @@ kmod->name, strerror(errno));
 
 
 
+		if(close(fd)<0) {
+			fprintf(stderr, "Failure on close() of module \"%s\": %s\n",
+kmod->name, strerror(errno));
+			goto abort;
+		}
+		fd=-1;
+
 		free(kmod->buf);
 		freecon(kmod->secon);
 		free(kmod);
 		kmod=next;
 	}
+
+	chdir("/");
 
 	if(!simulate) {
 		if(umount("/system")) {
@@ -620,6 +629,8 @@ strerror(errno));
 	return 1;
 
 abort:
+	chdir("/");
+
 	/* not much we can do in case of cascading errors */
 	if(!simulate) umount2("/modules", MNT_DETACH);
 
