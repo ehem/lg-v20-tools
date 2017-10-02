@@ -544,8 +544,16 @@ kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
 		zstr.next_out=(unsigned char *)buf;
 		zstr.avail_out=bufsz;
 
-		if((zres=zwrapper(&zstr, i,
-kdz->chunks[i].dz.slice_name, Z_FINISH))!=Z_STREAM_END) goto abort;
+		switch(zres=zwrapper(&zstr, i,
+kdz->chunks[i].dz.slice_name, gpt_type==GPT_PRIMARY?Z_SYNC_FLUSH:Z_STREAM_END)){
+		case Z_OK:
+			if(gpt_type==GPT_BACKUP) goto abort;
+			inflateEnd(&zstr);
+		case Z_STREAM_END:
+			break;
+		default:
+			goto abort;
+		}
 
 
 		/* load the corresponding device GPT */
