@@ -43,7 +43,7 @@ const char magic[]="LGE ONE BINARY\0";
 
 
 char model_name[23];
-char sim_num[2]={'\0', '\0'};
+char sim_str[2]={'\0', '\0'};
 char dsds_str[10]; //info->sim_num==2?"dsds":"none"
 char cmdline[2048]; /* lots of slack so all the entries can be appended */
 
@@ -56,7 +56,7 @@ struct entry {
 
 const struct entry entries[]={
 	{" model.name=",			model_name,	1},
-	{" lge.sim_num=",			sim_num,	1},
+	{" lge.sim_num=",			sim_str,	1},
 	{" lge.dsds=",				dsds_str,	1},
 	{" androidboot.bl_unlock_complete=",	"false",	0},
 	{" androidboot.authorized_kernel=",	"true",		0},
@@ -77,6 +77,7 @@ int main(int argc, char **argv)
 	char *buf;
 	const struct misc_hwinfo *info;
 	boot_img_hdr *bootimg;
+	uint8_t sim_num=0;
 	char new[512];
 	int i;
 
@@ -125,17 +126,15 @@ int main(int argc, char **argv)
 	}
 
 	strlcpy(model_name, info->lg_model_name, sizeof(model_name));
-	if(info->sim_num>9) {
-		fprintf(stderr, "SIM count of %d?!  That doesn't sound right...\n", info->sim_num);
-		return 1;
-	}
-	sim_num[0]='0'+info->sim_num;
 
-	strcpy(dsds_str, info->sim_num==1?"none":"dsds");
+	sim_num=!strcmp(model_name, "LG-H990ds")||!strcmp(model_name, "LG-H990N")?2:1;
+	sim_str[0]='0'+sim_num;
+
+	strcpy(dsds_str, sim_num==1?"none":"dsds");
 
 	snprintf(new, sizeof(new), " model.name=%s lge.sim_num=%s lge.dsds=%s "
 "androidboot.bl_unlock_complete=false androidboot.authorized_kernel=true",
-model_name, sim_num, dsds_str);
+model_name, sim_str, dsds_str);
 
 	printf("LGE model information format version %hd.%hd\n", info->hwinfo_major, info->hwinfo_minor);
 
