@@ -26,6 +26,7 @@
 #include <inttypes.h>
 #include <string.h>
 #include <stdlib.h>
+#include <endian.h>
 
 #include "bootimg.h"
 
@@ -66,6 +67,9 @@ const struct entry entries[]={
 #endif
 };
 
+static int read_misc(int verbose);
+static int write_bootimg(int fd, int verbose);
+
 
 /* come on Android, even the Linux kernel has strchrnul() */
 static char *strchrnul(const char *s, int c)
@@ -77,9 +81,6 @@ static char *strchrnul(const char *s, int c)
 int main(int argc, char **argv)
 {
 	int fd;
-	uint32_t blksz;
-	char *buf;
-	boot_img_hdr *bootimg;
 	uint8_t sim_num=0;
 	int i;
 	int opt;
@@ -133,6 +134,62 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+
+
+	if(read_misc(verbose)&&!model_name[0]) return 1;
+
+
+
+	if(!sim_num) sim_num=!strcmp(model_name, "LG-H990ds")||!strcmp(model_name, "LG-H990N")?2:1;
+	else if(verbose&&(!strcmp(model_name, "LG-H990ds")||!strcmp(model_name, "LG-H990N")?2:1)!=sim_num)
+		fprintf(stderr,
+"Alert!  Specified SIM count differs from expected count (%d).\n\a\n",
+!strcmp(model_name, "LG-H990ds")||!strcmp(model_name, "LG-H990N")?2:1);
+
+
+	sim_str[0]='0'+sim_num;
+
+
+
+
+#ifndef LINEAGEOS
+	strcpy(dsds_str, sim_num==1?"none":"dsds");
+#endif
+
+
+	if(argc-optind==0) {
+		if(verbose) {
+			fputs("Options to add/override in boot image: \"",
+stdout);
+			for(i=0; i<sizeof(entries)/sizeof(entries[0]); ++i) {
+				fputs(entries[i].key+!i, stdout);
+				fputs(entries[i].val, stdout);
+			}
+			fputs("\"\n", stdout);
+		}
+
+		return 0;
+	}
+
+
+	if(!strcmp(argv[optind], "-")) fd=0;
+	else if((fd=open(argv[optind], O_RDWR|O_LARGEFILE))<0) {
+		if(verbose) fprintf(stderr, "Failed when opening \"%s\": %s\n",
+argv[optind], strerror(errno));
+		close(fd);
+		return 1;
+	}
+
+
+	return write_bootimg(fd, verbose);
+}
+
+
+static int read_misc(int verbose)
+{
+	uint32_t blksz;
+	int fd;
+	char *buf;
 
 	if((fd=open("/dev/block/bootdevice/by-name/misc", O_RDONLY|O_LARGEFILE))<0) {
 		fprintf(stderr, "Failed to open misc area: %s\n",
@@ -200,52 +257,54 @@ strerror(errno));
 	}
 	close(fd);
 
+	free(buf);
 
-	if(!sim_num) sim_num=!strcmp(model_name, "LG-H990ds")||!strcmp(model_name, "LG-H990N")?2:1;
-	else if(verbose&&(!strcmp(model_name, "LG-H990ds")||!strcmp(model_name, "LG-H990N")?2:1)!=sim_num)
-		fprintf(stderr,
-"Alert!  Specified SIM count differs from expected count (%d).\n\a\n",
-!strcmp(model_name, "LG-H990ds")||!strcmp(model_name, "LG-H990N")?2:1);
+	return 0;
+}
 
 
-	sim_str[0]='0'+sim_num;
-
-#ifndef LINEAGEOS
-	strcpy(dsds_str, sim_num==1?"none":"dsds");
-#endif
-
-
-	if(argc-optind==0) {
-		if(verbose) {
-			fputs("Options to add/override in boot image: \"",
-stdout);
-			for(i=0; i<sizeof(entries)/sizeof(entries[0]); ++i) {
-				fputs(entries[i].key+!i, stdout);
-				fputs(entries[i].val, stdout);
-			}
-			fputs("\"\n", stdout);
-		}
-
-		return 0;
-	}
+static int write_bootimg(int fd, int verbose)
+{
+	uint32_t blksz=64;
+	int ret=0;
+	boot_img_hdr *bootimg;
+	int i;
 
 
-
-	if(!strcmp(argv[optind], "-")) fd=0;
-	else if((fd=open(argv[optind], O_RDWR|O_LARGEFILE))<0) {
-		if(verbose) fprintf(stderr, "Failed when opening \"%s\": %s\n",
-argv[optind], strerror(errno));
-		close(fd);
+	if(!(bootimg=malloc(blksz))) {
+		fprintf(stderr, "Memory allocation failed.\n");
 		return 1;
 	}
 
-
-	if(read(fd, buf, blksz)!=blksz) {
+	if(read(fd, bootimg, blksz)!=blksz) {
 		fprintf(stderr, "Read failed: %s\n", strerror(errno));
-		return 1;
+		ret=1;
+		goto fail;
 	}
 
-	bootimg=(boot_img_hdr *)buf;
+	if(memcmp(bootimg->magic, BOOT_MAGIC, BOOT_MAGIC_SIZE)) {
+		fprintf(stderr, "Bad magic number on boot image!\n");
+		ret=1;
+		goto fail;
+	}
+
+	blksz=le32toh(bootimg->page_size);
+
+	{
+		boot_img_hdr *tmp=bootimg;
+		if(!(bootimg=realloc(tmp, blksz))) {
+			fprintf(stderr, "Memory allocation failed.\n");
+			ret=1;
+			bootimg=tmp;
+			goto fail;
+		}
+	}
+
+	if(read(fd, bootimg, blksz-64)!=blksz-64) {
+		fprintf(stderr, "Read failed: %s\n", strerror(errno));
+		ret=1;
+		goto fail;
+	}
 
 
 	memcpy(cmdline, bootimg->cmdline, BOOT_ARGS_SIZE);
@@ -291,7 +350,8 @@ argv[optind], strerror(errno));
 	if(i>BOOT_ARGS_SIZE+BOOT_EXTRA_ARGS_SIZE) {
 		if(verbose) fprintf(stderr,
 "Resultant command-line is too long for boot image, cannot continue\n");
-		return 1;
+		ret=1;
+		goto fail;
 	}
 
 	memcpy(bootimg->cmdline, cmdline, BOOT_ARGS_SIZE);
@@ -302,27 +362,31 @@ argv[optind], strerror(errno));
 		if(lseek(fd, 0, SEEK_SET)) {
 			if(verbose) fprintf(stderr, "Seek failed: %s\n",
 strerror(errno));
-			return 1;
+			ret=1;
+			goto fail;
 		}
 
-		if(write(fd, buf, blksz)!=blksz) {
+		if(write(fd, bootimg, blksz)!=blksz) {
 			if(verbose) fprintf(stderr, "Write failed: %s\n",
 strerror(errno));
-			return 1;
+			ret=1;
+			goto fail;
 		}
 	} else {
 		int32_t cnt=blksz;
 		do {
-			if(write(1, buf, blksz)!=cnt) {
+			if(write(1, bootimg, blksz)!=cnt) {
 				if(verbose) fprintf(stderr,
 "Write failed: %s\n", strerror(errno));
-				return 1;
+				ret=1;
+				goto fail;
 			}
 
-			if((cnt=read(0, buf, blksz))<0) {
+			if((cnt=read(0, bootimg, blksz))<0) {
 				if(verbose) fprintf(stderr, "Read failed: %s\n",
 strerror(errno));
-				return 1;
+				ret=1;
+				goto fail;
 			}
 		} while(cnt>0);
 		fd=1; /* check for errors on close() */
@@ -332,9 +396,12 @@ strerror(errno));
 	if(close(fd)) {
 		if(verbose) fprintf(stderr, "Close failed: %s\n",
 strerror(errno));
-		return 1;
+		ret=1;
+		goto fail;
 	}
 
-	return 0;
+fail:
+	free(bootimg);
+	return ret;
 }
 
