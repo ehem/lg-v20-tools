@@ -68,6 +68,7 @@ const struct entry entries[]={
 };
 
 static int read_misc(int verbose);
+static int write_sysfs(const char *model_name, const char *sim_str);
 static int write_bootimg(int fd, int verbose);
 
 
@@ -84,10 +85,11 @@ int main(int argc, char **argv)
 	uint8_t sim_num=0;
 	int i;
 	int opt;
+	int bootmode=0;
 	int verbose=1;
 
 
-	while((opt=getopt(argc, argv, "1234m:qvhH?"))>=0) {
+	while((opt=getopt(argc, argv, "1234m:bqvhH?"))>=0) {
 		switch(opt) {
 		case '1':
 		case '2':
@@ -102,6 +104,10 @@ int main(int argc, char **argv)
 			strlcpy(model_name, optarg, sizeof(model_name));
 			break;
 
+		case 'b':
+			bootmode=1;
+			break;
+
 		case 'q':
 			verbose=0;
 			break;
@@ -114,12 +120,13 @@ int main(int argc, char **argv)
 		case '?':
 		default:
 			fprintf(stderr,
-"Usage: %s [-m <model>] [-1|-2] [-q] [-v] [-h] [<Android boot image>]\n"
+"Usage: %s [-m <model>] [-1|-2] [-b] [-q] [-v] [-h] [<Android boot image>]\n"
 "  -m <model>  Specify model name which generally starts with \"LG-H\".  Known\n"
 "      strings include \"LG-H990\", \"LG-H990ds\", \"LG-H990N\" and \
 \"LG-H990TR\"\n"
 "  -1  Specify model is single-SIM\n"
 "  -2  Specify model is dual-SIM\n"
+"  -b  Boot mode, set a fallback for sysfs during boot\n"
 "  -q  Quiet mode (no output)\n"
 "  -v  Verbose mode\n"
 "If the model isn't specified on command-line, an attempt will be made to\n"
@@ -136,8 +143,14 @@ int main(int argc, char **argv)
 
 
 
-	if(read_misc(verbose)&&!model_name[0]) return 1;
-
+	if(model_name[0])
+		read_misc(verbose); /* someone modified image, warnings */
+	else if(read_misc(verbose)) {
+		/* LG-H990ds seems the safest fallback string, no HW features
+missing, others appear okay with value */
+		if(bootmode) strcpy(model_name, "LG-H990ds");
+		else return 1;
+	}
 
 
 	if(!sim_num) sim_num=!strcmp(model_name, "LG-H990ds")||!strcmp(model_name, "LG-H990N")?2:1;
@@ -149,6 +162,10 @@ int main(int argc, char **argv)
 
 	sim_str[0]='0'+sim_num;
 
+
+
+	if((i=write_sysfs(model_name, sim_str))<0) return 1;
+	if(i>0&&argc-optind==0&&!verbose) return 0;
 
 
 
@@ -260,6 +277,54 @@ strerror(errno));
 	free(buf);
 
 	return 0;
+}
+
+
+static int _write_sysfs(const char *name, const char *val, const char *type);
+static int write_sysfs(const char *model_name, const char *sim_str)
+{
+	int ret=0;
+
+	ret+=_write_sysfs("/sys/devices/soc/2080000.qcom,mss/"
+"dirtysanta_lg_model_name", model_name, "model name");
+
+	ret+=_write_sysfs("/sys/devices/soc/2080000.qcom,mss/"
+"dirtysanta_sim_num", sim_str, "SIM count");
+
+	return ret;
+}
+static int _write_sysfs(const char *name, const char *val, const char *type)
+{
+	int fd;
+	int ret=0;
+
+	if((fd=open(name, O_RDWR))<0) switch(errno) {
+	case EPERM:
+		if(!getuid()&&!geteuid()) ++ret; /* was set via command-line */
+		break;
+	case ENOENT:
+		/* absent, likely TWRP kernel which lacks modem sup */
+		break;
+
+	default:
+		fprintf(stderr, "Error opening %s: %s\n", type, strerror(errno));
+		ret=-1000;
+	} else {
+		++ret;
+		if(write(fd, val, strlen(val))!=strlen(val)) {
+			fprintf(stderr, "Error writing %s: %s\n", type,
+strerror(errno));
+			ret=-1000;
+		}
+
+		if(close(fd)) {
+			fprintf(stderr, "Error closing %s: %s\n", type,
+strerror(errno));
+			ret=-1000;
+		}
+	}
+
+	return ret;
 }
 
 
