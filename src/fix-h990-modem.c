@@ -67,7 +67,9 @@ const struct entry entries[]={
 #endif
 };
 
+static int load_misc(int verbose, struct misc_hwinfo *hwinfo, int mode);
 static int read_misc(int verbose);
+static int write_misc(int verbose, const char *model_name);
 static int write_sysfs(const char *model_name, const char *sim_str);
 static int write_bootimg(int fd, int verbose);
 
@@ -85,11 +87,11 @@ int main(int argc, char **argv)
 	uint8_t sim_num=0;
 	int i;
 	int opt;
-	int bootmode=0;
+	int bootmode=0, writemode=0;
 	int verbose=1;
 
 
-	while((opt=getopt(argc, argv, "1234m:bqvhH?"))>=0) {
+	while((opt=getopt(argc, argv, "1234m:bwqvhH?"))>=0) {
 		switch(opt) {
 		case '1':
 		case '2':
@@ -108,6 +110,10 @@ int main(int argc, char **argv)
 			bootmode=1;
 			break;
 
+		case 'w':
+			writemode=1;
+			break;
+
 		case 'q':
 			verbose=0;
 			break;
@@ -120,13 +126,14 @@ int main(int argc, char **argv)
 		case '?':
 		default:
 			fprintf(stderr,
-"Usage: %s [-m <model>] [-1|-2] [-b] [-q] [-v] [-h] [<Android boot image>]\n"
+"Usage: %s [-m <model>] [-1|-2] [-b] [-w] [-q] [-v] [-h] [<Android boot image>]\n"
 "  -m <model>  Specify model name which generally starts with \"LG-H\".  Known\n"
 "      strings include \"LG-H990\", \"LG-H990ds\", \"LG-H990N\" and \
 \"LG-H990TR\"\n"
 "  -1  Specify model is single-SIM\n"
 "  -2  Specify model is dual-SIM\n"
 "  -b  Boot mode, set a fallback for sysfs during boot\n"
+"  -w  Write \"misc\" area, HAZARDOUS!\n"
 "  -q  Quiet mode (no output)\n"
 "  -v  Verbose mode\n"
 "If the model isn't specified on command-line, an attempt will be made to\n"
@@ -151,6 +158,10 @@ missing, others appear okay with value */
 		if(bootmode) strcpy(model_name, "LG-H990ds");
 		else return 1;
 	}
+
+
+	if(writemode)
+		write_misc(verbose, model_name);
 
 
 	if(!sim_num) sim_num=!strcmp(model_name, "LG-H990ds")||!strcmp(model_name, "LG-H990N")?2:1;
@@ -202,81 +213,121 @@ argv[optind], strerror(errno));
 }
 
 
-static int read_misc(int verbose)
+static int load_misc(int verbose, struct misc_hwinfo *info, int mode)
 {
 	uint32_t blksz;
+	const char *error;
 	int fd;
-	char *buf;
 
-	if((fd=open("/dev/block/bootdevice/by-name/misc", O_RDONLY|O_LARGEFILE))<0) {
-		fprintf(stderr, "Failed to open misc area: %s\n",
-strerror(errno));
-		return 1;
+	if((fd=open("/dev/block/bootdevice/by-name/misc", mode|O_LARGEFILE))<0) {
+		error="Failed to open misc area: %s\n";
+		goto problem;
 	}
 
 	/* I hope no one produces UFS with multiple block sizes */
 	if(ioctl(fd, BLKSSZGET, &blksz)<0) {
-		fprintf(stderr, "Failed to get device block size: %s\n",
-strerror(errno));
-		return 1;
+		error="Failed to get device block size: %s\n";
+		goto problem;
 	}
 
 	/* our minimum standard */
 	if(blksz<2048) blksz=2048;
 
-	if(!(buf=malloc(blksz))) {
-		fprintf(stderr, "Memory allocation failed.\n");
-		return 1;
+
+	if(lseek(fd, blksz*103, SEEK_SET)!=blksz*103) {
+		error="Seek failed: %s\n";
+		goto problem;
 	}
 
-
-	if(!model_name[0]||verbose) {
-		const char *error;
-		const struct misc_hwinfo *info;
-
-		if(lseek(fd, blksz*103, SEEK_SET)<0) {
-			error="Seek failed: %s\n";
-			goto problem;
-		}
-
-		if(read(fd, buf, blksz)!=blksz) {
-			error="Read failed: %s\n";
-			goto problem;
-		}
-
-		info=(struct misc_hwinfo *)buf;
-
-		if(memcmp(info->magic, magic, sizeof(magic))) {
-			error="Hardware information missing from \"misc\" area!\n";
-			goto problem;
-		}
-
-		if(verbose) printf("LGE model information format version %hd.%hd\n", info->hwinfo_major, info->hwinfo_minor);
-
-		if(!model_name[0]||!strcmp(model_name, info->lg_model_name))
-			strlcpy(model_name, info->lg_model_name,
-sizeof(model_name));
-		else if(verbose)
-			fprintf(stderr,
-"Warning model name differs from misc area (\"%s\").\n\a\n",
-info->lg_model_name);
-
-		while(0) {
-		problem:
-			if(!model_name[0]||verbose) fprintf(stderr, error,
-strerror(errno));
-			if(!model_name[0]) {
-				close(fd);
-				free(buf);
-				return 1;
-			}
-		}
+	if(read(fd, info, sizeof(struct misc_hwinfo))!=sizeof(struct misc_hwinfo)) {
+		error="Read failed: %s\n";
+		goto problem;
 	}
+
+	if(lseek(fd, blksz*103, SEEK_SET)!=blksz*103) {
+		error="Seek failed: %s\n";
+		goto problem;
+	}
+
+	return fd;
+
+problem:
+	if(verbose) fprintf(stderr, error, strerror(errno));
+	if(fd>=0) close(fd);
+	return -1;
+}
+
+
+static int read_misc(int verbose)
+{
+	int fd;
+	struct misc_hwinfo info;
+	const char *error;
+
+	if((fd=load_misc(!model_name[0]||verbose, &info, O_RDONLY))<0) return 1;
+
+	/* this function doesn't need to keep it around */
 	close(fd);
 
-	free(buf);
+
+	if(memcmp(info.magic, magic, sizeof(magic))) {
+		error="Hardware information missing from \"misc\" area!\n";
+		goto problem;
+	}
+
+	if(verbose) printf("LGE model information format version %hd.%hd\n", info.hwinfo_major, info.hwinfo_minor);
+
+	if(!model_name[0]||!strcmp(model_name, info.lg_model_name))
+		strlcpy(model_name, info.lg_model_name,
+sizeof(model_name));
+	else if(verbose)
+		fprintf(stderr,
+"Warning model name differs from misc area (\"%s\").\n\a\n",
+info.lg_model_name);
 
 	return 0;
+
+problem:
+	if(!model_name[0]||verbose) fprintf(stderr, error, strerror(errno));
+	return model_name[0]?0:1;
+}
+
+
+static int write_misc(int verbose, const char *model_name)
+{
+	int fd;
+	struct misc_hwinfo hwinfo;
+	const char *error;
+
+
+	if((fd=load_misc(verbose|1, &hwinfo, O_RDWR))<0)
+		return 1;
+
+	/* the magic number is our only check */
+	memcpy(hwinfo.magic, magic, sizeof(magic));
+
+	/* completely overwrite the model name */
+	memset(hwinfo.lg_model_name, 0, sizeof(hwinfo.lg_model_name));
+	strlcpy(hwinfo.lg_model_name, model_name, sizeof(hwinfo.lg_model_name));
+
+
+	if(write(fd, &hwinfo, sizeof(struct misc_hwinfo))!=sizeof(struct misc_hwinfo)) {
+		error="Write failed: %s\n";
+		goto problem;
+	}
+
+
+	if(close(fd)<0) {
+		error="Error on close(): %s\n";
+		goto problem;
+	}
+
+	return 0;
+
+problem:
+	fprintf(stderr, error, strerror(errno));
+	close(fd);
+	return 1;
 }
 
 
