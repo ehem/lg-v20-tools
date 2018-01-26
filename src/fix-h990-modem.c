@@ -27,6 +27,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <endian.h>
+#include <errno.h>
 
 #include "bootimg.h"
 
