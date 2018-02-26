@@ -190,7 +190,7 @@ missing, others appear okay with value */
 		if(verbose) {
 			fputs("Options to add/override in boot image: \"",
 stdout);
-			for(i=0; i<sizeof(entries)/sizeof(entries[0]); ++i) {
+			for(i=0; i<(int)(sizeof(entries)/sizeof(entries[0])); ++i) {
 				fputs(entries[i].key+!i, stdout);
 				fputs(entries[i].val, stdout);
 			}
@@ -363,7 +363,7 @@ static int _write_sysfs(const char *name, const char *val, const char *type)
 		ret=-1000;
 	} else {
 		++ret;
-		if(write(fd, val, strlen(val))!=strlen(val)) {
+		if(write(fd, val, strlen(val))!=(ssize_t)strlen(val)) {
 			fprintf(stderr, "Error writing %s: %s\n", type,
 strerror(errno));
 			ret=-1000;
@@ -428,7 +428,7 @@ static int write_bootimg(int fd, int verbose)
 	memcpy(cmdline+BOOT_ARGS_SIZE, bootimg->extra_cmdline, BOOT_EXTRA_ARGS_SIZE);
 	cmdline[BOOT_ARGS_SIZE+BOOT_EXTRA_ARGS_SIZE]='\0';
 
-	for(i=0; i<sizeof(entries)/sizeof(entries[0]); ++i) {
+	for(i=0; i<(int)(sizeof(entries)/sizeof(entries[0])); ++i) {
 		char *key, *val;
 		char *end;
 
@@ -453,7 +453,7 @@ static int write_bootimg(int fd, int verbose)
 
 		/* sigh, need to do something about this */
 		end=strchrnul(val, ' ');
-		if(end-val!=strlen(entries[i].val)) /* different length */
+		if(end-val!=(long)strlen(entries[i].val)) /* different length */
 			memmove(val+strlen(entries[i].val), end, strlen(end)+1);
 
 		memcpy(val, entries[i].val, strlen(entries[i].val));
