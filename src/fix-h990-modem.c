@@ -407,6 +407,12 @@ static int write_bootimg(int fd, int verbose)
 
 	blksz=le32toh(bootimg->page_size);
 
+	if(blksz<512||(blksz&(blksz-1))) {
+		fprintf(stderr, "Block size in boot image impossible!\n");
+		ret=1;
+		goto fail;
+	}
+
 	{
 		boot_img_hdr *tmp=bootimg;
 		if(!(bootimg=realloc(tmp, blksz))) {
@@ -417,7 +423,7 @@ static int write_bootimg(int fd, int verbose)
 		}
 	}
 
-	if(read(fd, bootimg, blksz-64)!=blksz-64) {
+	if(read(fd, (char *)bootimg+64, blksz-64)!=blksz-64) {
 		fprintf(stderr, "Read failed: %s\n", strerror(errno));
 		ret=1;
 		goto fail;
