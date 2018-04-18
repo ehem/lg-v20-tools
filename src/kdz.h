@@ -1,5 +1,5 @@
 /* **********************************************************************
-* Copyright (C) 2017 Elliott Mitchell					*
+* Copyright (C) 2017-2018 Elliott Mitchell				*
 *									*
 *	This program is free software: you can redistribute it and/or	*
 *	modify it under the terms of the GNU General Public License as	*
@@ -60,7 +60,7 @@ struct dz_file {
 	char version[144];	/* "factoryversion" */
 	uint32_t chunk_count;	/* number of chunks */
 	char md5[16];		/* MD5 of chunk headers */
-	uint32_t unknown0;
+	uint32_t flag_mmc;	/* 256 == managed flash */
 	uint32_t reserved1;
 	uint16_t reserved4;
 	char unknown1[16];
@@ -70,7 +70,7 @@ struct dz_file {
 	char android_version[10]; /* Android version */
 	char old_date_code[10];	/* anti-rollback? */
 	uint32_t reserved5;
-	uint32_t unknown4;
+	uint32_t flag_ufs;	/* 256 == UFS and multiple LUNs */
 	uint64_t unknown5;
 	char pad[164];
 };

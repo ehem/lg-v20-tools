@@ -1,5 +1,5 @@
 /* **********************************************************************
-* Copyright (C) 2017 Elliott Mitchell					*
+* Copyright (C) 2017-2018 Elliott Mitchell				*
 *									*
 *	This program is free software: you can redistribute it and/or	*
 *	modify it under the terms of the GNU General Public License as	*
@@ -71,6 +71,14 @@ struct kdz_file *open_kdzfile(const char *filename)
 	char md5out[16];
 	int devs=-1;
 
+	unsigned le32offs[]={
+		&dz.major	-(uint32_t *)&dz,
+		&dz.minor	-(uint32_t *)&dz,
+		&dz.chunk_count	-(uint32_t *)&dz,
+		&dz.flag_mmc	-(uint32_t *)&dz,
+		&dz.flag_ufs	-(uint32_t *)&dz,
+	};
+
 	if((fd=open(filename, O_RDONLY|O_LARGEFILE))<0) {
 		perror("failed open()ing file");
 		return ret;
@@ -113,7 +121,12 @@ struct kdz_file *open_kdzfile(const char *filename)
 		goto abort;
 	}
 
-	chunks=le32toh(dz.chunk_count);
+	for(i=0; i<sizeof(le32offs)/sizeof(le32offs[0]); ++i) {
+		uint32_t *tmp=(uint32_t *)&dz;
+		tmp[le32offs[i]]=le32toh(tmp[le32offs[i]]);
+	}
+
+	chunks=dz.chunk_count;
 
 	if(!(ret=malloc(sizeof(*ret)))) {
 		perror("memory allocation failure");
@@ -129,10 +142,7 @@ struct kdz_file *open_kdzfile(const char *filename)
 	ret->off=le64toh(kdz->off);
 
 	memcpy(&ret->dz_file, &dz, sizeof(struct dz_file));
-	ret->dz_file.major=le32toh(dz.major);
-	ret->dz_file.minor=le32toh(dz.minor);
-	ret->dz_file.reserved0=le32toh(dz.reserved0);
-	ret->dz_file.chunk_count=chunks;
+
 
 	if(chunks==0||chunks>(1<<20)) {
 		perror("chunk count isn't sane");
@@ -215,8 +225,16 @@ md5out[0xC], md5out[0xD], md5out[0xE], md5out[0xF]);
 	for(i=0; i<=devs; ++i) ret->devs[i].map=NULL;
 
 	for(i=0; i<=devs; ++i) {
-		char name[16];
-		snprintf(name, sizeof(name), "/dev/block/sd%c", (char)('a'+i));
+		char name[32];
+		char *fmt, unit;
+		if((ret->dz_file.flag_ufs&256)==256) {
+			fmt="/dev/block/sd%c";
+			unit='a';
+		} else {
+			fmt="/dev/block/mmcblk%c";
+			unit='0';
+		}
+		snprintf(name, sizeof(name), fmt, unit+i);
 
 		if((fd=open(name, O_RDONLY|O_LARGEFILE))<0) {
 			perror("open");
@@ -849,17 +867,17 @@ bool simulate)
 
 
 	{
-		/* on Linux O_EXCL refuses if mounted */
-		int flags=O_LARGEFILE|O_EXCL;
+		int flags=O_LARGEFILE;
 		char name[64];
-		if(!simulate) flags|=O_WRONLY;
+		/* on Linux O_EXCL refuses if mounted */
+		if(!simulate) flags|=O_EXCL|O_WRONLY;
 		snprintf(name, sizeof(name), "/dev/block/bootdevice/by-name/%s",
 slice_name);
 
 		if((fd=open(name, flags))<0) {
 			const char *fmt;
 			if(errno==EBUSY) fmt="\"%s\" mounted, refusing to continue\n";
-			else fmt="Failed to open \"%s\": %s";
+			else fmt="Failed to open \"%s\": %s\n";
 
 			fprintf(stderr, fmt, name, strerror(errno));
 			return 0;

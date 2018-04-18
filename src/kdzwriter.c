@@ -1,5 +1,5 @@
 /* **********************************************************************
-* Copyright (C) 2017 Elliott Mitchell					*
+* Copyright (C) 2017-2018 Elliott Mitchell				*
 *									*
 *	This program is free software: you can redistribute it and/or	*
 *	modify it under the terms of the GNU General Public License as	*
@@ -40,7 +40,7 @@
 int verbose=0;
 
 
-static struct kmod_file *read_kmods(void);
+static struct kmod_file *read_kmods(bool simulate);
 static int write_kmods(struct kmod_file *kmod, bool simulate);
 
 
@@ -143,7 +143,8 @@ int main(int argc, char **argv)
 		ret=1;
 	usage:
 		fprintf(stderr,
-"Copyright (C) 2017 Elliott Mitchell, distributed under GPLv3\n" "\n"
+"Copyright (C) 2017-2018 Elliott Mitchell, distributed under GPLv3\n"
+"Version: $Id$" "\n"
 "Usage: %s [-trsmOabvqB] <KDZ file>\n"
 "  -h  Help, this message\n" "  -v  Verbose, increase verbosity\n"
 "  -q  Quiet, decrease verbosity\n"
@@ -241,7 +242,7 @@ int main(int argc, char **argv)
 			if((mode&SYSTEM)==SYSTEM) {
 				printf("Begining rewrite of system area%s\n",
 mode&TEST?" (simulated)":"");
-				if(savekmods&&!(kmods=read_kmods())) {
+				if(savekmods&&!(kmods=read_kmods(mode&TEST?1:0))) {
 					fprintf(stderr,
 "%s: Failed while reading kernel modules\n", argv[0]);
 					ret=64;
@@ -370,24 +371,28 @@ struct kmod_file {
 	char name[];		/* filename */
 };
 
-static struct kmod_file *read_kmods(void)
+static struct kmod_file *read_kmods(bool simulate)
 {
 	struct kmod_file *ret=NULL, **pcur=&ret;
 	DIR *dir=NULL;
 	struct dirent64 *entry;
 	int fd=-1;
+	bool mounted=false;
 
 	libselinux_start();
 
 	/* hopefully not mounted, but make sure */
-	umount2("/system", MNT_DETACH);
+	if(!simulate) umount2("/system", MNT_DETACH);
 
 	if(mount("/dev/block/bootdevice/by-name/system", "/system",
 "ext4", MS_RDONLY, "discard")) {
-		fprintf(stderr, "Failed mounting system for kmod saving: %s\n",
+		if(!simulate||errno!=EBUSY) {
+			fprintf(stderr, "Failed mounting system for kmod saving: %s\n",
 strerror(errno));
-		goto abort;
-	}
+			goto abort;
+		}
+		mounted=false;
+	} else mounted=true;
 
 	if(!(dir=opendir("/system/lib/modules"))) {
 		fprintf(stderr, "Error while opening module directory: %s\n",
@@ -473,7 +478,7 @@ entry->d_name, strerror(errno));
 	chdir("/");
 
 	/* failure here is problematic since we would be writing a mounted FS */
-	if(umount("/system")) {
+	if(mounted&&umount("/system")) {
 		fprintf(stderr, "Failed during unmount of /system: %s\n",
 strerror(errno));
 		goto abort;
@@ -498,7 +503,7 @@ abort:
 	chdir("/");
 
 	/* either this suceeds, or dunno */
-	umount("/system");
+	if(mounted) umount("/system");
 
 	return NULL;
 }
