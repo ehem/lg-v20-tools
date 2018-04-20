@@ -25,15 +25,22 @@
 
 #include "md5.h"
 
+#ifndef BUILDTIME_LINK_LIBS
 static void *libcrypto=NULL;
 
-int (*pMD5_Init)(MD5_CTX *c)=NULL;
-int (*pMD5_Update)(MD5_CTX *c, const void *data, size_t len)=NULL;
-int (*pMD5_Final)(unsigned char *md, MD5_CTX *c)=NULL;
+#define WRAPSYM(sym) __typeof__(sym) *p##sym=NULL
+#else
+#define WRAPSYM(sym) __typeof__(sym) *const p##sym=(sym)
+#endif
+WRAPSYM(MD5_Init);
+WRAPSYM(MD5_Update);
+WRAPSYM(MD5_Final);
+#undef WRAPSYM
 
 
 void md5_start(void)
 {
+#ifndef BUILDTIME_LINK_LIBS
 	int i;
 	struct {
 		void **psym;
@@ -59,10 +66,12 @@ syms[i].name, dlerror());
 			exit(-1);
 		}
 	}
+#endif
 }
 
 void md5_stop(void)
 {
+#ifndef BUILDTIME_LINK_LIBS
 	if(!libcrypto) return;
 
 	dlclose(libcrypto);
@@ -70,5 +79,6 @@ void md5_stop(void)
 	pMD5_Init=NULL;
 	pMD5_Update=NULL;
 	pMD5_Final=NULL;
+#endif
 }
 

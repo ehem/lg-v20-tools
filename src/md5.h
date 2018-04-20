@@ -33,9 +33,19 @@ typedef struct {
 	uint64_t blobs[16];
 } MD5_CTX;
 
-extern int (*pMD5_Init)(MD5_CTX *c);
-extern int (*pMD5_Update)(MD5_CTX *c, const void *data, size_t len);
-extern int (*pMD5_Final)(unsigned char *md, MD5_CTX *c);
+extern int MD5_Init(MD5_CTX *c);
+extern int MD5_Update(MD5_CTX *c, const void *data, size_t len);
+extern int MD5_Final(unsigned char *md, MD5_CTX *c);
+
+#ifndef BUILDTIME_LINK_LIBS
+#define WRAPSYM(sym) extern __typeof__(sym) *p##sym
+#else
+#define WRAPSYM(sym) extern __typeof__(sym) *const p##sym
+#endif
+WRAPSYM(MD5_Init);
+WRAPSYM(MD5_Update);
+WRAPSYM(MD5_Final);
+#undef WRAPSYM
 
 extern void md5_start(void);
 extern void md5_stop(void);

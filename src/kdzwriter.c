@@ -299,12 +299,19 @@ abort:
 }
 
 
+#ifndef BUILDTIME_LINK_LIBS
 /* wrap the libselinux symbols we need */
 static void *libselinux=NULL;
 
-__typeof__(fgetfilecon) *p_fgetfilecon=NULL;
-__typeof__(fsetfilecon) *p_fsetfilecon=NULL;
-__typeof__(freecon) *p_freecon=NULL;
+#define WRAPSYM(sym) __typeof__(sym) *p_##sym=NULL
+#else
+#define WRAPSYM(sym) __typeof__(sym) *const p_##sym=(sym)
+#endif
+
+WRAPSYM(fgetfilecon);
+WRAPSYM(fsetfilecon);
+WRAPSYM(freecon);
+#undef WRAPSYM
 #define fgetfilecon (*p_fgetfilecon)
 #define fsetfilecon (*p_fsetfilecon)
 #define freecon (*p_freecon)
@@ -312,6 +319,7 @@ __typeof__(freecon) *p_freecon=NULL;
 
 void libselinux_start(void)
 {
+#ifndef BUILDTIME_LINK_LIBS
 	int i;
 	struct {
 		void **psym;
@@ -337,16 +345,19 @@ syms[i].name, dlerror());
 			exit(-1);
 		}
 	}
+#endif
 }
 
 void libselinux_stop(void)
 {
+#ifndef BUILDTIME_LINK_LIBS
 	if(!libselinux) return;
 
 	dlclose(libselinux);
 	p_fgetfilecon=NULL;
 	p_fsetfilecon=NULL;
 	p_freecon=NULL;
+#endif
 }
 
 
