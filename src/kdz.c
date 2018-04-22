@@ -374,6 +374,8 @@ dst->total_in, dst->total_out);
 }
 
 
+static int test_kdzfile_gpt_entry(int dev, int maxreturn,
+struct gpt_entry *kdzentry, struct gpt_entry *deventry);
 int test_kdzfile(struct kdz_file *kdz)
 {
 	int i;
@@ -418,7 +420,7 @@ int test_kdzfile(struct kdz_file *kdz)
 			{"msadp",		0x2}, /* worthwhile??? */
 			{"pmic",		0x2},
 			{"pmicbak",		0x2},
-			{"raw_resources",	0x3}, /* required */
+			{"raw_resources",	0x2}, /* required, mod cand */
 			{"raw_resourcesbak",	0x3}, /* required */
 			{"rpm",			0x2},
 			{"rpmbak",		0x2},
@@ -434,7 +436,7 @@ int test_kdzfile(struct kdz_file *kdz)
 		uint32_t cur=0;
 		bool mismatch=0;
 		enum gpt_type gpt_type;
-		struct gpt_data *gptdev, *gptkdz;
+		struct gpt_data *gptdev, *gptdev2, *gptkdz;
 		int res, mid;
 		int ii;
 
@@ -529,9 +531,10 @@ kdz->chunks[i].dz.slice_name, Z_FINISH)!=Z_STREAM_END) {
 		}
 
 /* special-case match for GPTs:
-** the type-UUIDs *must* match, but Id-UUIDs can differ.
-** for sda, the border between OP and userdata does in fact differ for
-** reason unknown.  For sdg, the types differ even for perfect match KDZ. */
+** The type-UUIDs *must* match, but Id-UUIDs can differ.  For sda, the border
+** between OP and userdata normally differs due to varying amounts of LGE
+** bloatware.  A tool to remove OP exists, and LineageOS is likely to modify
+** system area.  For sdg, the types differ even for perfect match KDZ. */
 
 		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
 		zstr.avail_in=kdz->chunks[i].dz.data_size;
@@ -589,20 +592,20 @@ gpt_type==GPT_PRIMARY?"primary":"backup", 'a'+dev);
 		gpt_buf.bufsz=kdz->devs[dev].len;
 		gpt_buf.buf=kdz->devs[dev].map;
 
-		if(!(gptkdz=readgptb(gptbuffunc, &gpt_buf, blksz, gpt_type==GPT_BACKUP?GPT_PRIMARY:GPT_BACKUP))) {
+		if(!(gptdev2=readgptb(gptbuffunc, &gpt_buf, blksz, gpt_type==GPT_BACKUP?GPT_PRIMARY:GPT_BACKUP))) {
 			fprintf(stderr, "Failed reading %s sd%c GPT\n",
 gpt_type==GPT_BACKUP?"primary":"backup", 'a'+dev);
 			free(gptdev);
 			goto abort;
 		}
 
-		if(!comparegpt(gptdev, gptkdz)) {
+		if(!comparegpt(gptdev, gptdev2)) {
 			free(gptdev);
-			free(gptkdz);
+			free(gptdev2);
 			goto abort;
 		}
 
-		free(gptkdz);
+		free(gptdev2);
 
 
 		/* load the KDZ GPT */
@@ -633,38 +636,10 @@ memcmp(&gptdev->head.dataStartLBA, &gptkdz->head.dataStartLBA,
 gptkdz->head.altLBA!=1&&gptdev->head.altLBA!=gptkdz->head.myLBA)
 			maxreturn=0;
 
-		for(ii=0; ii<gptdev->head.entryCount-1&&maxreturn>0; ++ii) {
-			if(gptdev->entry[ii].flags!=gptkdz->entry[ii].flags||
-uuid_compare(gptdev->entry[ii].type, gptkdz->entry[ii].type)||
-strncmp(gptdev->entry[ii].name, gptkdz->entry[ii].name, sizeof(gptdev->entry[ii].name))) {
-				maxreturn=0;
-				break;
-			}
 
-			/* the Ids always differ on sdg */
-			if(maxreturn&2&&dev!=6&&
-uuid_compare(gptdev->entry[ii].id, gptkdz->entry[ii].id)) maxreturn&=~2;
-
-
-			/* on-device border between OP and userdata differs */
-			if(gptdev->entry[ii].startLBA!=gptkdz->entry[ii].startLBA)
-				if(strcmp(gptdev->entry[ii].name, "userdata")||
-ii<=0||strcmp(gptdev->entry[ii-1].name, "OP")||
-gptdev->entry[ii].startLBA!=gptdev->entry[ii-1].endLBA+1||
-gptkdz->entry[ii].startLBA!=gptkdz->entry[ii-1].endLBA+1) {
-					maxreturn=0;
-					break;
-				}
-
-			if(gptdev->entry[ii].endLBA!=gptkdz->entry[ii].endLBA)
-				if(strcmp(gptdev->entry[ii].name, "OP")||
-ii>=gptdev->head.entryCount-1||strcmp(gptdev->entry[ii+1].name, "userdata")||
-gptdev->entry[ii].endLBA!=gptdev->entry[ii+1].startLBA-1||
-gptkdz->entry[ii].endLBA!=gptkdz->entry[ii+1].startLBA-1) {
-					maxreturn=0;
-					break;
-				}
-		}
+		for(ii=0; ii<gptdev->head.entryCount-1&&maxreturn>0; ++ii)
+			maxreturn=test_kdzfile_gpt_entry(dev, maxreturn,
+gptkdz->entry+ii, gptdev->entry+ii);
 
 		free(gptdev);
 		free(gptkdz);
@@ -688,6 +663,60 @@ abort:
 	if(zres!=Z_STREAM_END) zwrapper(&zstr, 0, "aborting", Z_FINISH);
 
 	return -1;
+}
+
+static int test_kdzfile_gpt_entry(int dev, int maxreturn,
+struct gpt_entry *kdzentry, struct gpt_entry *deventry)
+{
+	const char *const ignore[]={
+		"",
+		"OP",
+		"cache",
+		"cust",
+		"grow",
+		"grow2",
+		"grow3",
+		"grow4",
+		"grow5",
+		"grow6",
+		"grow7",
+		"system",
+		"userdata",
+	};
+	unsigned char lo=0, hi=sizeof(ignore)/sizeof(ignore[0]);
+	int res, mid;
+
+
+	while(mid=(hi+lo)/2, res=strcmp(kdzentry->name, ignore[mid])) {
+		if(res<0) hi=mid;
+		else if(res>0) lo=mid+1;
+		if(lo==hi) {
+			mid=-1; /* run all tests */
+			break;
+		}
+	}
+
+	/* ignore slices which are likely to be modified by LineageOS or LGE */
+	if(mid>=0) return maxreturn;
+
+	/* check name, flags, and type */
+	if(deventry->flags!=kdzentry->flags||
+uuid_compare(deventry->type, kdzentry->type)||
+strncmp(deventry->name, kdzentry->name, sizeof(deventry->name)))
+		return 0;
+
+	/* the Ids always differ on sdg */
+	if(maxreturn&2&&dev!=6&&
+uuid_compare(deventry->id, kdzentry->id)) maxreturn&=~2;
+
+	/* question is whether to try the above tests on non-empty entries? */
+
+	/* on-device border between OP and userdata differs */
+	if(deventry->startLBA!=kdzentry->startLBA||
+deventry->endLBA!=kdzentry->endLBA)
+		return 0;
+
+	return maxreturn;
 }
 
 
