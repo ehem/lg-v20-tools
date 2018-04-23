@@ -37,6 +37,8 @@ typedef unsigned short char16_t;
 #include <uchar.h>
 #endif
 
+#include <stdbool.h>
+
 
 /* Values from the GPT header */
 /* NOTE: All of these values are little-endian on storage media! */
