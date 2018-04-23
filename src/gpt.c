@@ -261,17 +261,10 @@ new->head.myLBA*blocksz)!=blocksz ||!testgpt(preadfunc, &dat, &buf, blocksz)) {
 
 
 	if(new->head.myLBA==1) { /* we were passed primary */
-		if(lseek64(fd, -(new->head.altLBA+1)*blocksz, SEEK_END)!=0) {
-			return false;
-		}
 		/* convert to secondary, which we write first */
 		new->head.myLBA=new->head.altLBA;
 		new->head.altLBA=1;
 		new->head.entryStart+=new->head.dataEndLBA-new->head.altLBA;
-
-	/* we were passed secondary */
-	} else if(lseek64(fd, -(new->head.myLBA+1)*blocksz, SEEK_END)!=0) {
-		return false;
 	}
 
 	/* hopefully shouldn't ever occur, but include a sanity test */
