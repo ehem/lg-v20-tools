@@ -1,5 +1,5 @@
 /* **********************************************************************
-* Copyright (C) 2016 Elliott Mitchell <ehem+android@m5p.com>		*
+* Copyright (C) 2016-2018 Elliott Mitchell <ehem+android@m5p.com>	*
 *									*
 *	This program is free software: you can redistribute it and/or	*
 *	modify it under the terms of the GNU General Public License as	*
@@ -230,9 +230,9 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 }
 
 
+static bool __writegpt(int fd, struct _gpt_data *new, size_t blocksz);
 bool _writegpt(int fd, struct _gpt_data *new)
 {
-	uint32_t crc;
 	size_t blocksz;
 
 	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
@@ -281,23 +281,7 @@ new->head.myLBA*blocksz)!=blocksz ||!testgpt(preadfunc, &dat, &buf, blocksz)) {
 
 /* UEFI specification, write backupGPT first, primaryGPT second */
 
-	if(lseek64(fd, new->head.entryStart*blocksz, SEEK_SET)<0) return false;
-#ifndef DISABLE_WRITES
-	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) return false;
-#endif
-
-	if(lseek64(fd, new->head.myLBA*blocksz, SEEK_SET)<0) return false;
-	gpt_native2raw(&new->head);
-
-	crc=crc32(0, (Byte *)&new->head, (char *)&new->head.headerCRC32-(char *)&new->head.magic);
-	crc=crc32(crc, (Byte *)"\x00\x00\x00\x00", 4);
-	crc=crc32(crc, (Byte *)&new->head.reserved, GPT_SIZE-((char *)&new->head.reserved-(char *)&new->head.magic));
-
-	new->head.headerCRC32=htole32(crc);
-
-#ifndef DISABLE_WRITES
-	if(write(fd, &new->head, sizeof(new->head))<0) return false;
-#endif
+	if(!__writegpt(fd, new, blocksz)) return false;
 
 
 	/* now for the primary */
@@ -310,25 +294,69 @@ new->head.myLBA*blocksz)!=blocksz ||!testgpt(preadfunc, &dat, &buf, blocksz)) {
 
 	/* entry CRC remains the same */
 
-	if(lseek64(fd, new->head.entryStart*blocksz, SEEK_SET)<0) return false;
-#ifndef DISABLE_WRITES
-	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) return false;
-#endif
 
-	if(lseek64(fd, blocksz, SEEK_SET)<0) return false;
+	if(!__writegpt(fd, new, blocksz)) return false;
+
+
+	return true;
+}
+
+static bool __gptpwrite(int fd, const void *buf, size_t cnt, off64_t off,
+size_t blocksz);
+static bool __writegpt(int fd, struct _gpt_data *new, size_t blocksz)
+{
+	uint32_t crc;
+	off64_t head=new->head.myLBA*blocksz;
+
+	if(!__gptpwrite(fd, new->entry,
+new->head.entryCount*new->head.entrySize, new->head.entryStart*blocksz,
+blocksz)) return false;
+
 	gpt_native2raw(&new->head);
 
-
-	crc=crc32(0, (Byte *)&new->head, (char *)&new->head.headerCRC32-(char *)&new->head.magic);
-	crc=crc32(crc, (Byte *)"\x00\x00\x00\x00", 4);
-	crc=crc32(crc, (Byte *)&new->head.reserved, GPT_SIZE-((char *)&new->head.reserved-(char *)&new->head.magic));
+	memset(&new->head.headerCRC32, 0, 4);
+	crc=crc32(0, (Byte *)&new->head, GPT_SIZE);
 
 	new->head.headerCRC32=htole32(crc);
 
-#ifndef DISABLE_WRITES
-	write(fd, &new->head, sizeof(new->head));
-#endif
+	if(!__gptpwrite(fd, &new->head, sizeof(new->head), head, blocksz))
+		return false;
 
+	return true;
+}
+
+static bool __gptpwrite(int fd, const void *_buf, size_t cnt, off64_t off,
+size_t blksz)
+{
+	const char *buf=_buf;
+	char cmp[blksz];
+	const unsigned long fblks=cnt/blksz;
+	unsigned long i;
+
+	if(lseek64(fd, off, SEEK_SET)!=off) return false;
+
+	for(i=0; i<fblks; ++i) {
+		if(read(fd, cmp, blksz)!=blksz) return false;
+		if(!memcmp(buf+i*blksz, cmp, blksz)) continue;
+#ifndef DISABLE_WRITES
+		if(lseek64(fd, -blksz, SEEK_CUR)<0) return false;
+		if(write(fd, buf+i*blksz, blksz)!=blksz) return false;
+#endif
+	}
+
+	/* this SHOULD NOT OCCUR */
+	if(cnt%blksz) {
+		/* can occur for header which is less than a block */
+		if(cnt>blksz) fprintf(stderr,
+"WARNING: GPT code hit unexpected condition, inspect results carefully!\n");
+		if(read(fd, cmp, cnt%blksz)!=cnt%blksz) return false;
+		if(memcmp(buf+i*blksz, cmp, cnt%blksz)) {
+#ifndef DISABLE_WRITES
+			if(lseek64(fd, -(cnt%blksz), SEEK_CUR)<0) return false;
+			if(write(fd, buf, cnt%blksz)!=cnt%blksz) return false;
+#endif
+		}
+	}
 
 	return true;
 }
