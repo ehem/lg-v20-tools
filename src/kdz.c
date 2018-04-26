@@ -159,6 +159,8 @@ __func__, ret->dz_file.major, ret->dz_file.minor, ret->dz_file.device, chunks);
 	(*pMD5_Init)(&md5);
 
 	for(cur=ret->off, i=0; i<=chunks; ++i) {
+		struct dz_chunk *const dz=&ret->chunks[i].dz;
+
 		if(cur+sizeof(struct dz_chunk)>len) {
 			fprintf(stderr, "Next chunk starts beyond end of file!\n");
 			goto abort;
@@ -169,18 +171,18 @@ __func__, ret->dz_file.major, ret->dz_file.minor, ret->dz_file.device, chunks);
 			(*pMD5_Update)(&md5, map+cur, sizeof(struct dz_chunk));
 		memcpy(&ret->chunks[i].dz, map+cur, sizeof(struct dz_chunk));
 
-		ret->chunks[i].dz.target_size=le32toh(ret->chunks[i].dz.target_size);
-		ret->chunks[i].dz.data_size=le32toh(ret->chunks[i].dz.data_size);
-		ret->chunks[i].dz.target_addr=le32toh(ret->chunks[i].dz.target_addr);
-		ret->chunks[i].dz.trim_count=le32toh(ret->chunks[i].dz.trim_count);
-		ret->chunks[i].dz.device=le32toh(ret->chunks[i].dz.device);
+		dz->target_size=le32toh(dz->target_size);
+		dz->data_size=le32toh(dz->data_size);
+		dz->target_addr=le32toh(dz->target_addr);
+		dz->trim_count=le32toh(dz->trim_count);
+		dz->device=le32toh(dz->device);
 
-		if((int32_t)ret->chunks[i].dz.device>devs) devs=ret->chunks[i].dz.device;
+		if((int32_t)dz->device>devs) devs=dz->device;
 
 		if(verbose>=3)
 			fprintf(stderr, "DEBUG: Slice Name: \"%s\"\n", ret->chunks[i].dz.slice_name);
 
-		cur+=sizeof(struct dz_chunk)+ret->chunks[i].dz.data_size;
+		cur+=sizeof(struct dz_chunk)+dz->data_size;
 	}
 
 	(*pMD5_Final)((unsigned char *)md5out, &md5);
@@ -396,7 +398,8 @@ int test_kdzfile(struct kdz_file *kdz)
 	int zres=Z_OK;
 
 	for(i=1; i<=kdz->dz_file.chunk_count&&maxreturn>0; ++i) {
-		const char *slice_name=kdz->chunks[i].dz.slice_name;
+		const struct dz_chunk *const dz=&kdz->chunks[i].dz;
+		const char *const slice_name=dz->slice_name;
 		struct {
 			const char *name;
 			const short result;
@@ -450,8 +453,8 @@ int test_kdzfile(struct kdz_file *kdz)
 		if(!(maxreturn&matches[mid].result)) continue;
 
 
-		if(kdz->chunks[i].dz.device!=dev) {
-			dev=kdz->chunks[i].dz.device;
+		if(dz->device!=dev) {
+			dev=dz->device;
 
 			blksz=kdz->devs[dev].blksz;
 			if(bufsz!=blksz*5) {
@@ -472,24 +475,24 @@ int test_kdzfile(struct kdz_file *kdz)
 		crc=crc32(0, Z_NULL, 0);
 
 		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
-		zstr.avail_in=kdz->chunks[i].dz.data_size;
+		zstr.avail_in=dz->data_size;
 		zstr.total_in=zstr.total_out=0;
 
-		if(kdz->chunks[i].dz.target_size%blksz) {
+		if(dz->target_size%blksz) {
 			fprintf(stderr, "Block, not a multiple of block size!\n");
 			goto abort;
 		}
 
 
-		while(cur<kdz->chunks[i].dz.target_size) {
-			uint32_t cmp=kdz->chunks[i].dz.target_size-cur;
+		while(cur<dz->target_size) {
+			uint32_t cmp=dz->target_size-cur;
 			if(cmp>bufsz) cmp=bufsz;
 
 			zstr.next_out=(unsigned char *)buf;
 			zstr.avail_out=cmp;
 
-			switch(zres=zwrapper(&zstr, i,
-kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
+			switch(zres=zwrapper(&zstr, i, slice_name,
+Z_SYNC_FLUSH)) {
 			case Z_OK:
 			case Z_STREAM_END:
 				break;
@@ -502,22 +505,22 @@ kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
 
 			/* keep going to verify the CRC and MD5 */
 			if(!mismatch&&
-memcmp(map+kdz->chunks[i].dz.target_addr*blksz+cur, buf, cmp)) mismatch=1;
+memcmp(map+dz->target_addr*blksz+cur, buf, cmp)) mismatch=1;
 
 			cur+=cmp;
 		}
 
-		if(zres!=Z_STREAM_END&&zwrapper(&zstr, i,
-kdz->chunks[i].dz.slice_name, Z_FINISH)!=Z_STREAM_END) {
+		if(zres!=Z_STREAM_END&&zwrapper(&zstr, i, slice_name,
+Z_FINISH)!=Z_STREAM_END) {
 			zres=Z_STREAM_END; /* already refused */
 			goto abort;
 		}
 
 		(*pMD5_Final)((unsigned char *)md5out, &md5);
 
-		if(crc!=le32toh(kdz->chunks[i].dz.crc32)) goto abort;
+		if(crc!=le32toh(dz->crc32)) goto abort;
 
-		if(memcmp(md5out, kdz->chunks[i].dz.md5, sizeof(md5out)))
+		if(memcmp(md5out, dz->md5, sizeof(md5out)))
 			goto abort;
 
 		/* exact match, nothing to worry about */
@@ -537,22 +540,22 @@ kdz->chunks[i].dz.slice_name, Z_FINISH)!=Z_STREAM_END) {
 ** system area.  For sdg, the types differ even for perfect match KDZ. */
 
 		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
-		zstr.avail_in=kdz->chunks[i].dz.data_size;
+		zstr.avail_in=dz->data_size;
 		zstr.total_in=zstr.total_out=0;
 
-		if(kdz->chunks[i].dz.target_addr<=3) gpt_type=GPT_PRIMARY;
+		if(dz->target_addr<=3) gpt_type=GPT_PRIMARY;
 		else {
 			gpt_type=GPT_BACKUP;
 			cur=0;
 			/* chew off enough for the remainder to fill buffer */
-			while(kdz->chunks[i].dz.target_size-cur>bufsz) {
+			while(dz->target_size-cur>bufsz) {
 				zstr.next_out=(unsigned char *)buf;
-				zstr.avail_out=kdz->chunks[i].dz.target_size-bufsz-cur;
+				zstr.avail_out=dz->target_size-bufsz-cur;
 				if(zstr.avail_out>bufsz) zstr.avail_out=bufsz;
 
 
-				switch(zres=zwrapper(&zstr, i,
-kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
+				switch(zres=zwrapper(&zstr, i, slice_name,
+Z_SYNC_FLUSH)) {
 				case Z_OK:
 				case Z_STREAM_END:
 					break;
@@ -565,8 +568,8 @@ kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
 		zstr.next_out=(unsigned char *)buf;
 		zstr.avail_out=bufsz;
 
-		switch(zres=zwrapper(&zstr, i,
-kdz->chunks[i].dz.slice_name, gpt_type==GPT_PRIMARY?Z_SYNC_FLUSH:Z_STREAM_END)){
+		switch(zres=zwrapper(&zstr, i, slice_name,
+gpt_type==GPT_PRIMARY?Z_SYNC_FLUSH:Z_STREAM_END)){
 		case Z_OK:
 			if(gpt_type==GPT_BACKUP) goto abort;
 			inflateEnd(&zstr);
@@ -741,9 +744,10 @@ int report_kdzfile(struct kdz_file *kdz)
 
 	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
 		const char *fmt;
+		const struct dz_chunk *const dz=&kdz->chunks[i].dz;
 
-		if(kdz->chunks[i].dz.device!=dev) {
-			dev=kdz->chunks[i].dz.device;
+		if(dz->device!=dev) {
+			dev=dz->device;
 
 			blksz=kdz->devs[dev].blksz;
 
@@ -764,27 +768,27 @@ int report_kdzfile(struct kdz_file *kdz)
 		crc=crc32(0, Z_NULL, 0);
 
 		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
-		zstr.avail_in=kdz->chunks[i].dz.data_size;
+		zstr.avail_in=dz->data_size;
 		zstr.total_in=zstr.total_out=0;
 
 		mismatch=0;
 
 
 
-		if(kdz->chunks[i].dz.target_size%blksz) {
+		if(dz->target_size%blksz) {
 			fprintf(stderr, "Block, not a multiple of block size!\n");
 		}
 
 		cur=0;
 
-		while(cur<kdz->chunks[i].dz.target_size) {
+		while(cur<dz->target_size) {
 			int zres;
 
 			zstr.next_out=(unsigned char *)buf;
 			zstr.avail_out=bufsz;
 
-			switch(zres=zwrapper(&zstr, i,
-kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
+			switch(zres=zwrapper(&zstr, i, dz->slice_name,
+Z_SYNC_FLUSH)) {
 			case Z_OK:
 			case Z_STREAM_END:
 				break;
@@ -795,28 +799,26 @@ kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
 			(*pMD5_Update)(&md5, buf, bufsz);
 			crc=crc32(crc, (Bytef *)buf, bufsz);
 
-			if(memcmp(map+kdz->chunks[i].dz.target_addr*blksz+cur,
-buf, blksz)) ++mismatch;
+			if(memcmp(map+dz->target_addr*blksz+cur, buf, blksz))
+				++mismatch;
 
 			cur+=blksz;
 		}
 
 		(*pMD5_Final)((unsigned char *)md5out, &md5);
 
-		if(crc!=le32toh(kdz->chunks[i].dz.crc32))
-			printf("Chunk %d(%s): CRC32 mismatch!\n", i, kdz->chunks[i].dz.slice_name);
+		if(crc!=le32toh(dz->crc32))
+			printf("Chunk %d(%s): CRC32 mismatch!\n", i, dz->slice_name);
 
-		if(memcmp(md5out, kdz->chunks[i].dz.md5, sizeof(md5out)))
-			printf("Chunk %d(%s): MD5 mismatch!\n", i, kdz->chunks[i].dz.slice_name);
+		if(memcmp(md5out, dz->md5, sizeof(md5out)))
+			printf("Chunk %d(%s): MD5 mismatch!\n", i, dz->slice_name);
 
 		if(mismatch)
 			fmt="Chunk %1$d(%2$s): %7$d of %3$ld blocks mismatched (%4$lu-%5$lu,trim=%6$lu)\n";
 		else
 			fmt="Chunk %d(%s): all %ld blocks matched (%lu-%lu,trim=%lu)\n";
-		printf(fmt, i, kdz->chunks[i].dz.slice_name,
-kdz->chunks[i].dz.target_size/blksz, kdz->chunks[i].dz.target_addr,
-kdz->chunks[i].dz.target_addr+kdz->chunks[i].dz.trim_count,
-kdz->chunks[i].dz.trim_count, mismatch);
+		printf(fmt, i, dz->slice_name, dz->target_size/blksz,
+dz->target_addr, dz->target_addr+dz->trim_count, dz->trim_count, mismatch);
 
 	abort_block:
 		zwrapper(&zstr, 0, "aborting", Z_ERRNO);
@@ -915,18 +917,19 @@ slice_name);
 
 
 	for(; i<=kdz->dz_file.chunk_count; ++i) {
+		const struct dz_chunk *const dz=&kdz->chunks[i].dz;
 		uint64_t range[2];
 
 		/* obviously skip other slices */
-		if(strcmp(slice_name, kdz->chunks[i].dz.slice_name)) continue;
+		if(strcmp(slice_name, dz->slice_name)) continue;
 
-		if(dev!=kdz->chunks[i].dz.device) { /* trouble! */
+		if(dev!=dz->device) { /* trouble! */
 			fprintf(stderr, "PANIC: \"%s\"'s chunks cross multiple devices?!\n", slice_name);
 			goto abort;
 		}
 
-		if(bufsz<kdz->chunks[i].dz.target_size) {
-			bufsz=kdz->chunks[i].dz.target_size;
+		if(bufsz<dz->target_size) {
+			bufsz=dz->target_size;
 			free(buf);
 			if(!(buf=malloc(bufsz))) {
 				fprintf(stderr, "Memory allocation failure!\n");
@@ -935,7 +938,7 @@ slice_name);
 		}
 
 
-		if(kdz->chunks[i].dz.target_size%blksz) {
+		if(dz->target_size%blksz) {
 			fprintf(stderr, "Block, not a multiple of block size!\n");
 			goto abort;
 		}
@@ -945,28 +948,28 @@ slice_name);
 		crc=crc32(0, Z_NULL, 0);
 
 		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
-		zstr.avail_in=kdz->chunks[i].dz.data_size;
+		zstr.avail_in=dz->data_size;
 		zstr.total_in=zstr.total_out=0;
 
 
 		zstr.next_out=(unsigned char *)buf;
-		zstr.avail_out=kdz->chunks[i].dz.target_size;
+		zstr.avail_out=dz->target_size;
 
 		if((zres=zwrapper(&zstr, i, slice_name,
 Z_FINISH))!=Z_STREAM_END) goto abort;
 
-		(*pMD5_Update)(&md5, buf, kdz->chunks[i].dz.target_size);
-		crc=crc32(crc, (Bytef *)buf, kdz->chunks[i].dz.target_size);
+		(*pMD5_Update)(&md5, buf, dz->target_size);
+		crc=crc32(crc, (Bytef *)buf, dz->target_size);
 
 
 		(*pMD5_Final)((unsigned char *)md5out, &md5);
 
-		if(crc!=le32toh(kdz->chunks[i].dz.crc32)) {
+		if(crc!=le32toh(dz->crc32)) {
 			fprintf(stderr, "Chunk %d CRC-32 mismatch!\n", i);
 			goto abort;
 		}
 
-		if(memcmp(md5out, kdz->chunks[i].dz.md5, sizeof(md5out))) {
+		if(memcmp(md5out, dz->md5, sizeof(md5out))) {
 			fprintf(stderr, "Chunk %d MD5 mismatch!\n", i);
 			goto abort;
 		}
@@ -975,8 +978,8 @@ Z_FINISH))!=Z_STREAM_END) goto abort;
 		if(verbose>=3) fprintf(stderr, "DEBUG: chunk %u\n", i);
 
 		/* write the device while trying to keep wear to a minimum */
-		for(j=0; j<kdz->chunks[i].dz.target_size; j+=blksz) {
-			uint64_t target=kdz->chunks[i].dz.target_addr*blksz+j;
+		for(j=0; j<dz->target_size; j+=blksz) {
+			uint64_t target=dz->target_addr*blksz+j;
 
 			if(!memcmp(buf+j, kdz->devs[dev].map+target, blksz)) {
 
@@ -1009,11 +1012,9 @@ Z_FINISH))!=Z_STREAM_END) goto abort;
 		/* Note, this is being done on the slice, so slice-relative */
 
 		/* start byte */
-		range[0]=kdz->chunks[i].dz.target_addr*blksz-offset+
-kdz->chunks[i].dz.target_size;
+		range[0]=dz->target_addr*blksz-offset+dz->target_size;
 
-		range[1]=kdz->chunks[i].dz.trim_count*blksz-
-kdz->chunks[i].dz.target_size;
+		range[1]=dz->trim_count*blksz-dz->target_size;
 
 
 		if(verbose>=3) fprintf(stderr,
