@@ -118,6 +118,9 @@ extern int test_kdzfile(struct kdz_file *kdz);
 /* test and report state of device/KDZ */
 extern int report_kdzfile(struct kdz_file *kdz);
 
+/* restore GPTs from KDZ file, unless simulate */
+extern bool fix_gpts(const struct kdz_file *kdz, const bool simulate);
+
 /* (re)write the named flash slice, unless simulate */
 extern int write_kdzfile(const struct kdz_file *kdz, const char *slice_name,
 bool simulate);

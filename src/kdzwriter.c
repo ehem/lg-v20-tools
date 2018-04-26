@@ -50,7 +50,7 @@ int main(int argc, char **argv)
 	struct kmod_file *kmods;
 	int ret=0;
 	int opt;
-	enum {
+	enum mode_enum {
 		TEST	=0x0800,
 		READ	=0x4000,
 		WRITE	=0x8000,
@@ -65,11 +65,12 @@ int main(int argc, char **argv)
 		OP	=SHAR_WRITE|0x10,
 		BOOTLOADER=EXCL_WRITE|0x1,
 		RESTORE	=EXCL_WRITE|0x2,
+		SLICES  =EXCL_WRITE|0x80,
 		MODE_MASK=0x0F,
 	} mode=0;
 	bool savekmods=1;
 
-	while((opt=getopt(argc, argv, "trsmckOabvqMBhH?"))>=0) {
+	while((opt=getopt(argc, argv, "trsmckOSPabvqMBhH?"))>=0) {
 		switch(opt) {
 			int modecnt;
 		case 'r':
@@ -98,6 +99,10 @@ int main(int argc, char **argv)
 			mode|=OP;
 			goto check_mode;
 
+		case 'P':
+			mode|=SLICES;
+			goto check_mode;
+
 		case 'a':
 			mode|=SYSTEM|MODEM|CUST;
 			goto check_mode;
@@ -111,7 +116,14 @@ int main(int argc, char **argv)
 			modecnt=0;
 			if(mode&READ) ++modecnt;
 			if((mode&SHAR_WRITE)==SHAR_WRITE) ++modecnt;
-			if((mode&EXCL_WRITE)==EXCL_WRITE) ++modecnt;
+			if((mode&EXCL_WRITE)==EXCL_WRITE) {
+				enum mode_enum tmp;
+				++modecnt;
+
+				/* multiple exclusive modes is a problem */
+				tmp=mode&~EXCL_WRITE;
+				if(tmp&tmp-1) goto badmode;
+			}
 
 			if(modecnt<=1) break;
 
@@ -145,7 +157,7 @@ int main(int argc, char **argv)
 		fprintf(stderr,
 "Copyright (C) 2017-2018 Elliott Mitchell, distributed under GPLv3\n"
 "Version: $Id$" "\n"
-"Usage: %s [-trsmOabvqB] <KDZ file>\n"
+"Usage: %s [-trsmOPabvqB] <KDZ file>\n"
 "  -h  Help, this message\n" "  -v  Verbose, increase verbosity\n"
 "  -q  Quiet, decrease verbosity\n"
 "  -t  Test, does the KDZ file appear applicable, simulates writing\n"
@@ -155,11 +167,12 @@ int main(int argc, char **argv)
 "  -M  Do NOT attempt to preserve old kernel modules\n"
 "  -m  Modem, write modem area from KDZ\n"
 "  -c  Cust, write area appearing to effect VoLTE from KDZ\n"
+"  -P  Restore GPTs which were modified by non-stock Android installation\n"
 "  -O  OP, write OP area from KDZ\n"
 "  -k  Kernel, write kernel/boot area from KDZ; need to restore system at\n"
 "      same time, or else be prepared to install new kernel immediately!\n"
 "  -b  Bootloader, write bootloader from KDZ; USED FOR RETURNING TO STOCK!\n"
-"Only one of -t, -r, -a, or -b is allowed.  -s, -m, -k, and -O may be used \n"
+"Only one of -P, -b, or -r is allowed.  -a, -s, -m, -k, and -O may be used\n"
 "together, but they exclude the prior options.\n", argv[0]);
 		return ret;
 	}
@@ -231,6 +244,29 @@ int main(int argc, char **argv)
 		}
 		printf("Write bootloader (to be implemented)\n");
 		break;
+	case SLICES:
+	case SLICES|TEST:
+		if(test_kdzfile(kdz)<2) {
+			fprintf(stderr,
+"%s: This KDZ file is an insufficiently good match for this device,\n"
+"abandoning operation!\n", argv[0]);
+			ret=8;
+			goto abort;
+		}
+
+		printf("Begining replacement of GPTs%s\n",
+mode&TEST?" (simulated)":"");
+
+		if(!fix_gpts(kdz, mode&TEST?1:0)) {
+			fprintf(stderr,
+"%s: Failed while restoring GPTs, task failed, but DON'T PANIC.\n",
+argv[0]);
+			ret=1;
+
+			goto abort;
+		}
+
+		break;
 	default:
 		if((mode&WRITE)==WRITE) {
 			if(test_kdzfile(kdz)<=0) {
@@ -241,7 +277,7 @@ int main(int argc, char **argv)
 				goto abort;
 			}
 
-			if((mode&SYSTEM)==SYSTEM) {
+			if(mode&SYSTEM&~SHAR_WRITE) {
 				printf("Begining rewrite of system area%s\n",
 mode&TEST?" (simulated)":"");
 				if(savekmods&&!(kmods=read_kmods(mode&TEST?1:0))) {
@@ -264,24 +300,24 @@ argv[0]);
 				printf("Finished rewrite of system area%s\n",
 mode&TEST?" (simulated)":"");
 			}
-			if((mode&MODEM)==MODEM) {
+			if(mode&MODEM&~SHAR_WRITE) {
 				printf("Begining rewrite of modem area%s\n",
 mode&TEST?" (simulated)":"");
 				write_kdzfile(kdz, "modem", mode&TEST?1:0);
 				printf("Finished rewrite of modem area%s\n",
 mode&TEST?" (simulated)":"");
 			}
-			if((mode&CUST)==CUST) {
+			if(mode&CUST&~SHAR_WRITE) {
 				printf("Begining rewrite of cust area%s\n",
 mode&TEST?" (simulated)":"");
 				write_kdzfile(kdz, "cust", mode&TEST?1:0);
 				printf("Finished rewrite of cust area%s\n",
 mode&TEST?" (simulated)":"");
 			}
-			if((mode&OP)==OP) {
+			if(mode&OP&~SHAR_WRITE) {
 				printf("Write OP (to be implemented)\n");
 			}
-			if((mode&KERNEL)==KERNEL) {
+			if(mode&KERNEL&~SHAR_WRITE) {
 				printf("Begining reinstall of stock kernel/boot%s\n", mode&TEST?" (simulated)":"");
 				write_kdzfile(kdz, "boot", mode&TEST?1:0);
 				printf("Finished reinstall of boot area%s\n",

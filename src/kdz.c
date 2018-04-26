@@ -25,6 +25,8 @@
 #include <endian.h>
 #include <sys/mman.h>
 #include <linux/fs.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <zlib.h>
@@ -54,6 +56,9 @@ struct unpackctx {
 	z_stream zstr;
 };
 
+
+/* open the appropriate device (flags=O_RDONLY or O_RDWR, most often) */
+static int open_device(const struct kdz_file *kdz, int dev, int flags);
 
 /* initialize the unpacking context */
 static bool unpackchunk_alloc(struct unpackctx *ctx,
@@ -238,21 +243,7 @@ md5out[0xC], md5out[0xD], md5out[0xE], md5out[0xF]);
 	for(i=0; i<=devs; ++i) ret->devs[i].map=NULL;
 
 	for(i=0; i<=devs; ++i) {
-		char name[32];
-		char *fmt, unit;
-		if((ret->dz_file.flag_ufs&256)==256) {
-			fmt="/dev/block/sd%c";
-			unit='a';
-		} else {
-			fmt="/dev/block/mmcblk%c";
-			unit='0';
-		}
-		snprintf(name, sizeof(name), fmt, unit+i);
-
-		if((fd=open(name, O_RDONLY|O_LARGEFILE))<0) {
-			perror("open");
-			goto abort;
-		}
+		if((fd=open_device(ret, i, O_RDONLY))<0) goto abort;
 
 		if(ioctl(fd, BLKSSZGET, &ret->devs[i].blksz)<0) {
 			perror("ioctl");
@@ -708,6 +699,219 @@ abort:
 }
 
 
+bool fix_gpts(const struct kdz_file *kdz, const bool simulate)
+{
+	int i, j;
+	int dev=-1;
+	struct unpackctx _ctx={0,}, *const ctx=&_ctx;
+	size_t bufsz=4096;
+	char *buf=NULL;
+	struct gpt_data *gptkdz=NULL;
+	int fd;
+	unsigned long long opsz;
+	bool ret=true;
+
+	if(!(buf=malloc(bufsz))) return false;
+
+	if(access("/dev/block/bootdevice/by-name/cust", F_OK)<0) {
+		fprintf(stderr,
+"Cannot access /dev/block/bootdevice/by-name, assuming OP size of 0.\n");
+		opsz=0;
+	} else {
+		if(mkdir("/cust", 0777)<0) {
+			struct stat buf;
+			if(errno!=EEXIST) {
+				fprintf(stderr,
+"Failed to create /cust mount point: %s\n", strerror(errno));
+				goto abort;
+			}
+			if(stat("/cust", &buf)<0||!S_ISDIR(buf.st_mode)) {
+				fprintf(stderr,
+"Failed when creating /cust mount point, unable to continue\n");
+				goto abort;
+			}
+			/* this could mean we were run recently... */
+			umount("/cust");
+		}
+
+		if(mount("/dev/block/bootdevice/by-name/cust", "/cust",
+"ext4", MS_RDONLY, "discard")) {
+			fprintf(stderr,
+"Failed OP resize data retrieval: %s\n", strerror(errno));
+			goto abort;
+		}
+
+		if((fd=open("/cust/official_op_resize.cfg",
+O_RDONLY|MS_NOATIME))<0) {
+			fprintf(stderr,
+"Unable to open official_op_resize.cfg: %s\n", strerror(errno));
+			umount("/cust");
+			goto abort;
+		}
+
+		if(read(fd, buf, bufsz)<0) {
+			fprintf(stderr,
+"Failed during read of official_op_resize.cfg: %s\n", strerror(errno));
+			opsz=0;
+		} else {
+			buf[bufsz-1]='\0';
+
+			i=strchr(buf, '=')-buf+1;
+
+			opsz=strtoull(buf+i, NULL, 0);
+		}
+
+		if(verbose>=1) fprintf(stderr,
+"official_op_resize.cfg makes /OP %llu bytes\n", opsz);
+
+		close(fd);
+		umount("/cust");
+	}
+
+
+	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
+		const struct dz_chunk *const dz=&kdz->chunks[i].dz;
+		uint32_t blksz;
+		struct gpt_buf gpt_buf;
+
+		if(strcmp(dz->slice_name, "PrimaryGPT")) continue;
+
+		if((dev=open_device(kdz, dz->device, O_RDWR))<0) goto abort;
+
+		blksz=kdz->devs[dz->device].blksz;
+
+
+		if(dz->target_size>bufsz) {
+			free(buf);
+			bufsz=dz->target_size;
+			if(!(buf=malloc(bufsz))) {
+				fprintf(stderr, "Memory allocation failure.\n");
+				goto abort;
+			}
+		}
+
+		if(!unpackchunk_alloc(ctx, kdz, i)) goto abort;
+
+		if(unpackchunk(ctx, buf, dz->target_size)!=dz->target_size)
+			goto abort;
+
+		if(!unpackchunk_free(ctx, false)) goto abort;
+
+		gpt_buf.bufsz=dz->target_size;
+		gpt_buf.buf=buf;
+		if(!(gptkdz=readgptb(gptbuffunc, &gpt_buf, blksz, GPT_PRIMARY))) {
+			fprintf(stderr,
+"Failed to load GPT from primary image in KDZ, aborting.\n");
+			goto abort;
+		}
+
+
+		for(j=0; j<gptkdz->head.entryCount; ++j) {
+			int64_t delta;
+			uint32_t start, end;
+			struct gpt_entry *const kdzentr=gptkdz->entry+j;
+
+			if(!strcmp("persistent", kdzentr->name)) {
+				struct gpt_data *gptdev=NULL;
+
+				gpt_buf.bufsz=kdz->devs[dz->device].len;
+				gpt_buf.buf=kdz->devs[dz->device].map;
+				gptdev=readgptb(gptbuffunc, &gpt_buf, blksz,
+GPT_ANY);
+
+				if(gptdev&&!uuid_is_null(gptdev->entry[j].id))
+					uuid_copy(kdzentr->id, gptdev->entry[j].id);
+
+				else {
+					int urandom;
+					urandom=open("/dev/urandom", O_RDONLY);
+
+					/* I'm guessing this is appropriate */
+					/* if this fails, well can't do much */
+					if(urandom>=0) {
+						read(urandom, &kdzentr->id, sizeof(kdzentr->id));
+						close(urandom);
+					}
+				}
+
+				if(gptdev) free(gptdev);
+			}
+
+			if(strcmp("OP", kdzentr->name)) continue;
+
+			/* convert to block count */
+			delta=opsz/blksz;
+
+			/* oddly OP in KDZ files is non-zero size */
+			delta-=(kdzentr->endLBA-kdzentr->startLBA+1);
+
+			start=end=j;
+			if(!strcmp("userdata", gptkdz->entry[j-1].name)) {
+				if(verbose>=7) fprintf(stderr,
+"DEBUG: userdata before OP, userdata end=%lu, OP begin=%lu\n",
+gptkdz->entry[j-1].endLBA, kdzentr->startLBA);
+				if(gptkdz->entry[j-1].endLBA+1!=kdzentr->startLBA) continue;
+				--end;
+				delta=-delta;
+			} else if(!strcmp("userdata", gptkdz->entry[j+1].name)) {
+				if(verbose>=7) fprintf(stderr,
+"DEBUG: OP before userdata, userdata begin=%lu, OP end=%lu\n",
+gptkdz->entry[j+1].startLBA, kdzentr->endLBA);
+				if(gptkdz->entry[j+1].startLBA!=kdzentr->endLBA+1) continue;
+				++start;
+			} else continue;
+			if(verbose>=4) fprintf(stderr,
+"DEBUG: OP: start idx %u end idx %u, delta=%+ld\n", start, end, delta);
+			gptkdz->entry[start].startLBA+=delta;
+			gptkdz->entry[end].endLBA+=delta;
+			if(verbose>=4) fprintf(stderr,
+"DEBUG: OP: new start %lu, new end %lu\n", gptkdz->entry[start].startLBA,
+gptkdz->entry[end].endLBA);
+
+			/* Yes, they ARE this perverse; adjust userdata first */
+			if(opsz<=0)
+				memset(kdzentr, 0, sizeof(struct gpt_entry));
+		}
+
+		if(!simulate) {
+			if(!writegpt(dev, gptkdz)) {
+				fprintf(stderr, "\bGPT write operation failed!\n");
+				goto abort;
+			}
+
+			/* the GPT code ignores the first block */
+			if(memcmp(buf, kdz->devs[dz->device].map, 512))
+				pwrite(dev, buf, 512, 0);
+		} else close(dev);
+
+		free(gptkdz);
+		gptkdz=NULL;
+
+		if(!simulate) {
+			/* failure indicates kernel may be using old table */
+			if(ioctl(dev, BLKRRPART, NULL)) {
+				if(verbose>=7) fprintf(stderr,
+"ioctl(BLKRRPART) failed, kernel still uses old GPT\n");
+				ret=false;
+			}
+		}
+	}
+
+	return ret;
+
+abort:
+	if(buf) free(buf);
+
+	if(gptkdz) free(gptkdz);
+
+	if(dev>=0) close(dev);
+
+	unpackchunk_free(ctx, true);
+
+	return false;
+}
+
+
 int write_kdzfile(const struct kdz_file *const kdz,
 const char *const slice_name, const bool simulate)
 {
@@ -862,7 +1066,8 @@ range[1]/blksz, range[0], range[0]/blksz);
 
 		/* do the deed (sanity check, and not simulating) */
 		if(range[1]>0&&range[1]<((uint64_t)1<<40)&&!simulate)
-			ioctl(fd, BLKDISCARD, range);
+			if(ioctl(fd, BLKDISCARD, range)<0&&verbose>=1)
+fprintf(stderr, "Discard failed: %s\n", strerror(errno));
 	}
 
 	if(fd>=0) close(fd);
@@ -881,6 +1086,49 @@ abort:
 	if(verbose<3) putchar('\n');
 
 	return 0;
+}
+
+
+static int open_device(const struct kdz_file *kdz, int dev, int flags)
+{
+	char name[32];
+	const char *fmt;
+	char unit;
+	if((kdz->dz_file.flag_ufs&256)==256) {
+		fmt="/dev/block/sd%c";
+		unit='a';
+	} else {
+		fmt="/dev/block/mmcblk%c";
+		unit='0';
+	}
+	snprintf(name, sizeof(name), fmt, unit+dev);
+
+	if(verbose>=5) {
+		switch(flags&O_ACCMODE) {
+		case O_RDONLY:
+			fmt="reading";
+			break;
+		case O_RDWR:
+		default:
+			fmt="read-write";
+			break;
+		case O_WRONLY:
+			fmt="writing";
+			break;
+		}
+		fprintf(stderr, "DEBUG: Opening %s, for %s (flags=%d)\n",
+name, fmt, flags);
+	}
+
+#ifdef DISABLE_WRITES
+	flags&=~O_RDWR&~O_WRONLY;
+#endif
+
+	if((dev=open(name, flags|O_LARGEFILE))<0) {
+		perror("open");
+	}
+
+	return dev;
 }
 
 
@@ -974,7 +1222,6 @@ ctx->zstr.total_in, ctx->zstr.total_out);
 
 static bool unpackchunk_free(struct unpackctx *const ctx, bool discard)
 {
-	const struct dz_chunk *const dz=&ctx->kdz->chunks[ctx->chunk].dz;
 	char md5out[16];
 
 	if(verbose>=12) fprintf(stderr, "DEBUG: %s called, %sdiscarding\n",
@@ -985,6 +1232,10 @@ __func__, discard?"":"not ");
 "unpackchunk_free called on invalid context\n");
 		return false;
 	}
+
+	/* Yuck, but until this point ctx->kdz could be NULL */
+	const struct dz_chunk *const dz=&ctx->kdz->chunks[ctx->chunk].dz;
+
 	ctx->valid=0; /* or about to be invalid */
 
 	if(inflateEnd(&ctx->zstr)!=Z_OK||!ctx->z_finished) {
