@@ -185,6 +185,8 @@ int main(int argc, char **argv)
 		} while(count--);
 	}
 
+	if(verbose>=10) fprintf(stderr, "DEBUG: Entering action switch\n");
+
 	switch(mode) {
 	case REPORT:
 	case REPORT|TEST:
