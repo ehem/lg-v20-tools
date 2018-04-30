@@ -234,6 +234,7 @@ static bool __writegpt(int fd, struct _gpt_data *new, size_t blocksz);
 bool _writegpt(int fd, struct _gpt_data *new)
 {
 	size_t blocksz;
+	uint64_t entryblks;
 
 	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
 		/* If the passed-in one has it set, it better be right. */
@@ -243,12 +244,12 @@ bool _writegpt(int fd, struct _gpt_data *new)
 		char *buf;
 		struct preaddat dat={fd, lseek64(fd, 0, SEEK_END)};
 
-		if(!(blocksz=new->blocksz)) return false;
+		if(!(blocksz=new->blocksz)||blocksz&(blocksz-1)) return false;
 
 		/* check for the presence of *something* vaguely sane */
 		if(!(buf=malloc(blocksz))) return false;
 		if(preadfunc(&dat, buf, blocksz,
-new->head.myLBA*blocksz)!=blocksz ||!testgpt(preadfunc, &dat, &buf, blocksz)) {
+new->head.myLBA*blocksz)!=blocksz) {
 			free(buf);
 			return false;
 		}
@@ -260,20 +261,29 @@ new->head.myLBA*blocksz)!=blocksz ||!testgpt(preadfunc, &dat, &buf, blocksz)) {
 	if(new->head.entrySize!=sizeof(struct _gpt_entry)) return false;
 
 
+	entryblks=(new->head.entryCount*sizeof(struct _gpt_entry)+blocksz-1)/blocksz;
+	/* the GPT specification requires reserving space for this many
+	** entries, but doesn't actually specify the table should be placed
+	** for this much room between start of table and header */
+	if(entryblks<sizeof(struct _gpt_entry)*128/blocksz)
+		entryblks=(sizeof(struct _gpt_entry)*128+blocksz-1)/blocksz;
+
 	if(new->head.myLBA==1) { /* we were passed primary */
 		/* convert to secondary, which we write first */
 		new->head.myLBA=new->head.altLBA;
-		new->head.altLBA=1;
-		new->head.entryStart+=new->head.dataEndLBA-new->head.altLBA;
+		new->head.entryStart=new->head.myLBA-entryblks;
 	}
 
 	/* hopefully shouldn't ever occur, but include a sanity test */
 	{
-		uint64_t entrysz=(new->head.entryCount*sizeof(struct _gpt_entry)+blocksz-1)/blocksz;
-		uint64_t entry=entrysz+new->head.entryStart;
+		uint64_t entry=entryblks+new->head.entryStart;
 
-		if(entry>=new->head.myLBA) return false;
-		entry-=new->head.dataEndLBA-new->head.altLBA;
+		/* checking space at end */
+		if(new->head.entryStart<=new->head.dataEndLBA) return false;
+
+		/* checking sanity */
+		if(entry>new->head.myLBA) return false;
+		entry=entryblks+1; /* LBA of last begining entry table */
 		if(entry>=new->head.dataStartLBA) return false;
 	}
 
@@ -287,10 +297,9 @@ new->head.myLBA*blocksz)!=blocksz ||!testgpt(preadfunc, &dat, &buf, blocksz)) {
 	/* now for the primary */
 	gpt_raw2native(&new->head);
 
-	new->head.altLBA=new->head.myLBA;
 	new->head.myLBA=1;
 
-	new->head.entryStart-=new->head.dataEndLBA-new->head.myLBA;
+	new->head.entryStart=new->head.myLBA+1;
 
 	/* entry CRC remains the same */
 
@@ -505,7 +514,6 @@ const struct gpt_entry *__restrict src, iconv_t iconvctx)
 	inlen=0;
 	outlen=0;
 	while((rc=mbrtoc16(dst->name+outlen, in+inlen, sizeof(src->name)-inlen, &state))) {
-		if(!(out[outlen]=htole16(out[outlen]))) break;
 		if(rc>0) {
 			inlen+=rc;
 			++outlen;
