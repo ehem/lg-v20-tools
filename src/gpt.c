@@ -151,7 +151,14 @@ success:
 #endif
 
 	for(i=cnt-1; i>=0; --i)
+#ifndef USE_ICONV
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
 		gpt_entry_raw2native(ret->entry+i, _ret->entry+i, iconvctx);
+#ifndef USE_ICONV
+#pragma GCC diagnostic pop
+#endif
 
 #ifdef USE_ICONV
 	iconv_close(iconvctx);
@@ -383,7 +390,14 @@ bool gpt_entries2raw(struct _gpt_data *dst, const struct gpt_data *gpt)
 
 	for(i=0; i<gpt->head.entryCount; ++i) {
 		struct _gpt_entry tmp;
+#ifndef USE_ICONV
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
 		gpt_entry_native2raw(&tmp, gpt->entry+i, iconvctx);
+#ifndef USE_ICONV
+#pragma GCC diagnostic pop
+#endif
 		memcpy(dst->entry+i, &tmp, sizeof(struct _gpt_entry));
 	}
 
@@ -443,7 +457,14 @@ void gpt_native2raw(struct gpt_header *const d)
 void gpt_entry_raw2native(struct gpt_entry *dst, struct _gpt_entry *src,
 iconv_t iconvctx)
 {
+#ifndef USE_ICONV
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused"
+#endif
 	char *in=(char *)src->name, out[sizeof(dst->name)], *outp=out;
+#ifndef USE_ICONV
+#pragma GCC diagnostic pop
+#endif
 	size_t inlen, outlen;
 #ifndef USE_ICONV
 	mbstate_t state;
