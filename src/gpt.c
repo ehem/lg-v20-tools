@@ -1,5 +1,5 @@
 /* **********************************************************************
-* Copyright (C) 2016 Elliott Mitchell <ehem+android@m5p.com>		*
+* Copyright (C) 2016-2018 Elliott Mitchell <ehem+android@m5p.com>	*
 *									*
 *	This program is free software: you can redistribute it and/or	*
 *	modify it under the terms of the GNU General Public License as	*
@@ -18,6 +18,10 @@
 
 
 #define _LARGEFILE64_SOURCE
+/* NDK's clang #defines this */
+#ifndef __STDC_UTF_16__
+#define __STDC_UTF_16__
+#endif
 
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -151,7 +155,14 @@ success:
 #endif
 
 	for(i=cnt-1; i>=0; --i)
+#ifndef USE_ICONV
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
 		gpt_entry_raw2native(ret->entry+i, _ret->entry+i, iconvctx);
+#ifndef USE_ICONV
+#pragma GCC diagnostic pop
+#endif
 
 #ifdef USE_ICONV
 	iconv_close(iconvctx);
@@ -230,10 +241,11 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 }
 
 
+static bool __writegpt(int fd, struct _gpt_data *new, size_t blocksz);
 bool _writegpt(int fd, struct _gpt_data *new)
 {
-	uint32_t crc;
 	size_t blocksz;
+	uint64_t entryblks;
 
 	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
 		/* If the passed-in one has it set, it better be right. */
@@ -243,12 +255,12 @@ bool _writegpt(int fd, struct _gpt_data *new)
 		char *buf;
 		struct preaddat dat={fd, lseek64(fd, 0, SEEK_END)};
 
-		if(!(blocksz=new->blocksz)) return false;
+		if(!(blocksz=new->blocksz)||blocksz&(blocksz-1)) return false;
 
 		/* check for the presence of *something* vaguely sane */
 		if(!(buf=malloc(blocksz))) return false;
 		if(preadfunc(&dat, buf, blocksz,
-new->head.myLBA*blocksz)!=blocksz ||!testgpt(preadfunc, &dat, &buf, blocksz)) {
+new->head.myLBA*blocksz)!=blocksz) {
 			free(buf);
 			return false;
 		}
@@ -260,27 +272,29 @@ new->head.myLBA*blocksz)!=blocksz ||!testgpt(preadfunc, &dat, &buf, blocksz)) {
 	if(new->head.entrySize!=sizeof(struct _gpt_entry)) return false;
 
 
+	entryblks=(new->head.entryCount*sizeof(struct _gpt_entry)+blocksz-1)/blocksz;
+	/* the GPT specification requires reserving space for this many
+	** entries, but doesn't actually specify the table should be placed
+	** for this much room between start of table and header */
+	if(entryblks<sizeof(struct _gpt_entry)*128/blocksz)
+		entryblks=(sizeof(struct _gpt_entry)*128+blocksz-1)/blocksz;
+
 	if(new->head.myLBA==1) { /* we were passed primary */
-		if(lseek64(fd, -(new->head.altLBA+1)*blocksz, SEEK_END)!=0) {
-			return false;
-		}
 		/* convert to secondary, which we write first */
 		new->head.myLBA=new->head.altLBA;
-		new->head.altLBA=1;
-		new->head.entryStart+=new->head.dataEndLBA-new->head.altLBA;
-
-	/* we were passed secondary */
-	} else if(lseek64(fd, -(new->head.myLBA+1)*blocksz, SEEK_END)!=0) {
-		return false;
+		new->head.entryStart=new->head.myLBA-entryblks;
 	}
 
 	/* hopefully shouldn't ever occur, but include a sanity test */
 	{
-		uint64_t entrysz=(new->head.entryCount*sizeof(struct _gpt_entry)+blocksz-1)/blocksz;
-		uint64_t entry=entrysz+new->head.entryStart;
+		uint64_t entry=entryblks+new->head.entryStart;
 
-		if(entry>=new->head.myLBA) return false;
-		entry-=new->head.dataEndLBA-new->head.altLBA;
+		/* checking space at end */
+		if(new->head.entryStart<=new->head.dataEndLBA) return false;
+
+		/* checking sanity */
+		if(entry>new->head.myLBA) return false;
+		entry=entryblks+1; /* LBA of last begining entry table */
 		if(entry>=new->head.dataStartLBA) return false;
 	}
 
@@ -288,54 +302,81 @@ new->head.myLBA*blocksz)!=blocksz ||!testgpt(preadfunc, &dat, &buf, blocksz)) {
 
 /* UEFI specification, write backupGPT first, primaryGPT second */
 
-	if(lseek64(fd, new->head.entryStart*blocksz, SEEK_SET)<0) return false;
-#ifndef DISABLE_WRITES
-	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) return false;
-#endif
-
-	if(lseek64(fd, new->head.myLBA*blocksz, SEEK_SET)<0) return false;
-	gpt_native2raw(&new->head);
-
-	crc=crc32(0, (Byte *)&new->head, (char *)&new->head.headerCRC32-(char *)&new->head.magic);
-	crc=crc32(crc, (Byte *)"\x00\x00\x00\x00", 4);
-	crc=crc32(crc, (Byte *)&new->head.reserved, GPT_SIZE-((char *)&new->head.reserved-(char *)&new->head.magic));
-
-	new->head.headerCRC32=htole32(crc);
-
-#ifndef DISABLE_WRITES
-	if(write(fd, &new->head, sizeof(new->head))<0) return false;
-#endif
+	if(!__writegpt(fd, new, blocksz)) return false;
 
 
 	/* now for the primary */
 	gpt_raw2native(&new->head);
 
-	new->head.altLBA=new->head.myLBA;
 	new->head.myLBA=1;
 
-	new->head.entryStart-=new->head.dataEndLBA-new->head.myLBA;
+	new->head.entryStart=new->head.myLBA+1;
 
 	/* entry CRC remains the same */
 
-	if(lseek64(fd, new->head.entryStart*blocksz, SEEK_SET)<0) return false;
-#ifndef DISABLE_WRITES
-	if(write(fd, new->entry, new->head.entryCount*new->head.entrySize)<0) return false;
-#endif
 
-	if(lseek64(fd, blocksz, SEEK_SET)<0) return false;
+	if(!__writegpt(fd, new, blocksz)) return false;
+
+
+	return true;
+}
+
+static bool __gptpwrite(int fd, const void *buf, size_t cnt, off64_t off,
+size_t blocksz);
+static bool __writegpt(int fd, struct _gpt_data *new, size_t blocksz)
+{
+	uint32_t crc;
+	off64_t head=new->head.myLBA*blocksz;
+
+	if(!__gptpwrite(fd, new->entry,
+new->head.entryCount*new->head.entrySize, new->head.entryStart*blocksz,
+blocksz)) return false;
+
 	gpt_native2raw(&new->head);
 
-
-	crc=crc32(0, (Byte *)&new->head, (char *)&new->head.headerCRC32-(char *)&new->head.magic);
-	crc=crc32(crc, (Byte *)"\x00\x00\x00\x00", 4);
-	crc=crc32(crc, (Byte *)&new->head.reserved, GPT_SIZE-((char *)&new->head.reserved-(char *)&new->head.magic));
+	memset(&new->head.headerCRC32, 0, 4);
+	crc=crc32(0, (Byte *)&new->head, GPT_SIZE);
 
 	new->head.headerCRC32=htole32(crc);
 
-#ifndef DISABLE_WRITES
-	write(fd, &new->head, sizeof(new->head));
-#endif
+	if(!__gptpwrite(fd, &new->head, sizeof(new->head), head, blocksz))
+		return false;
 
+	return true;
+}
+
+static bool __gptpwrite(int fd, const void *_buf, size_t cnt, off64_t off,
+size_t blksz)
+{
+	const char *buf=_buf;
+	char cmp[blksz];
+	const unsigned long fblks=cnt/blksz;
+	unsigned long i;
+
+	if(lseek64(fd, off, SEEK_SET)!=off) return false;
+
+	for(i=0; i<fblks; ++i) {
+		if(read(fd, cmp, blksz)!=blksz) return false;
+		if(!memcmp(buf+i*blksz, cmp, blksz)) continue;
+#ifndef DISABLE_WRITES
+		if(lseek64(fd, -blksz, SEEK_CUR)<0) return false;
+		if(write(fd, buf+i*blksz, blksz)!=blksz) return false;
+#endif
+	}
+
+	/* this SHOULD NOT OCCUR */
+	if(cnt%blksz) {
+		/* can occur for header which is less than a block */
+		if(cnt>blksz) fprintf(stderr,
+"WARNING: GPT code hit unexpected condition, inspect results carefully!\n");
+		if(read(fd, cmp, cnt%blksz)!=cnt%blksz) return false;
+		if(memcmp(buf+i*blksz, cmp, cnt%blksz)) {
+#ifndef DISABLE_WRITES
+			if(lseek64(fd, -(cnt%blksz), SEEK_CUR)<0) return false;
+			if(write(fd, buf, cnt%blksz)!=cnt%blksz) return false;
+#endif
+		}
+	}
 
 	return true;
 }
@@ -353,7 +394,14 @@ bool gpt_entries2raw(struct _gpt_data *dst, const struct gpt_data *gpt)
 
 	for(i=0; i<gpt->head.entryCount; ++i) {
 		struct _gpt_entry tmp;
+#ifndef USE_ICONV
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#endif
 		gpt_entry_native2raw(&tmp, gpt->entry+i, iconvctx);
+#ifndef USE_ICONV
+#pragma GCC diagnostic pop
+#endif
 		memcpy(dst->entry+i, &tmp, sizeof(struct _gpt_entry));
 	}
 
@@ -413,7 +461,14 @@ void gpt_native2raw(struct gpt_header *const d)
 void gpt_entry_raw2native(struct gpt_entry *dst, struct _gpt_entry *src,
 iconv_t iconvctx)
 {
+#ifndef USE_ICONV
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused"
+#endif
 	char *in=(char *)src->name, out[sizeof(dst->name)], *outp=out;
+#ifndef USE_ICONV
+#pragma GCC diagnostic pop
+#endif
 	size_t inlen, outlen;
 #ifndef USE_ICONV
 	mbstate_t state;
@@ -484,7 +539,6 @@ const struct gpt_entry *__restrict src, iconv_t iconvctx)
 	inlen=0;
 	outlen=0;
 	while((rc=mbrtoc16(dst->name+outlen, in+inlen, sizeof(src->name)-inlen, &state))) {
-		if(!(out[outlen]=htole16(out[outlen]))) break;
 		if(rc>0) {
 			inlen+=rc;
 			++outlen;
@@ -492,11 +546,17 @@ const struct gpt_entry *__restrict src, iconv_t iconvctx)
 			++outlen;
 		else break;
 	}
-	out[outlen]='\0';
+	dst->name[outlen]=0;
+	rc=0;
+	while(dst->name[rc]) {
+		dst->name[rc]=htole16(dst->name[rc]);
+		++rc;
+	}
 #endif
 
 	/* ensure any remainder is cleared */
-	memset((char *)dst->name+sizeof(dst->name)-outlen, 0, outlen);
+	memset(dst->name+outlen, 0,
+sizeof(dst->name)-outlen*sizeof(dst->name[0]));
 }
 
 

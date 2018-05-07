@@ -1,5 +1,5 @@
 /* **********************************************************************
-* Copyright (C) 2016 Elliott Mitchell <ehem+android@m5p.com>		*
+* Copyright (C) 2016-2018 Elliott Mitchell <ehem+android@m5p.com>	*
 *									*
 *	This program is free software: you can redistribute it and/or	*
 *	modify it under the terms of the GNU General Public License as	*
@@ -36,6 +36,8 @@ typedef unsigned short char16_t;
 #else
 #include <uchar.h>
 #endif
+
+#include <stdbool.h>
 
 
 /* Values from the GPT header */
@@ -129,9 +131,6 @@ extern bool writegpt(int fd, const struct gpt_data *gpt);
 /* WARNING: _writegpt() and __writegpt WILL modify the data */
 /* write the given GPT to storage media, where header is still in host fmt */
 extern bool _writegpt(int fd, struct _gpt_data *gpt);
-
-/* write the given GPT to storage media, which is fully prepared */
-extern bool __writegpt(int fd, struct _gpt_data *gpt);
 
 /* don't contaiminate others' namespace */
 #undef GPT_OFF_T
