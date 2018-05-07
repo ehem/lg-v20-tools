@@ -18,6 +18,10 @@
 
 
 #define _LARGEFILE64_SOURCE
+/* NDK's clang #defines this */
+#ifndef __STDC_UTF_16__
+#define __STDC_UTF_16__
+#endif
 
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -542,11 +546,17 @@ const struct gpt_entry *__restrict src, iconv_t iconvctx)
 			++outlen;
 		else break;
 	}
-	out[outlen]='\0';
+	dst->name[outlen]=0;
+	rc=0;
+	while(dst->name[rc]) {
+		dst->name[rc]=htole16(dst->name[rc]);
+		++rc;
+	}
 #endif
 
 	/* ensure any remainder is cleared */
-	memset((char *)dst->name+sizeof(dst->name)-outlen, 0, outlen);
+	memset(dst->name+outlen, 0,
+sizeof(dst->name)-outlen*sizeof(dst->name[0]));
 }
 
 
