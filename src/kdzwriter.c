@@ -29,6 +29,8 @@
 #include <sys/stat.h>
 #include <sys/mount.h>
 #include <sys/time.h>
+#include <ctype.h>
+#include <termios.h>
 
 #include <selinux/selinux.h>
 #include <dlfcn.h>
@@ -156,7 +158,7 @@ int main(int argc, char **argv)
 	usage:
 		fprintf(stderr,
 "Copyright (C) 2017-2018 Elliott Mitchell, distributed under GPLv3\n"
-"Version: $Id$" "\n"
+"Version: $Id$\n" "\n"
 "Usage: %s [-trsmOPabvqB] <KDZ file>\n"
 "  -h  Help, this message\n" "  -v  Verbose, increase verbosity\n"
 "  -q  Quiet, decrease verbosity\n"
@@ -189,13 +191,48 @@ int main(int argc, char **argv)
 	/* one final warning before doing the deed */
 	if(mode&WRITE&&!(mode&TEST)) {
 		int count=10;
-		printf("Preparing active write operation, are you sure?\n");
+
+		printf(
+"About to start an active write operation, there is some risk involved.\n"
+"Are you sure? (y/N)\n");
+
+		{
+			char buf;
+			tcflag_t lflag;
+			cc_t save0, save1;
+			struct termios termios;
+			tcgetattr(0, &termios);
+			lflag=termios.c_lflag;
+			save0=termios.c_cc[VMIN];
+			save1=termios.c_cc[VTIME];
+			termios.c_lflag&=~ICANON;
+			termios.c_cc[VMIN]=1;
+			termios.c_cc[VTIME]=0;
+			tcsetattr(fileno(stdin), TCSANOW, &termios);
+			buf=getchar();
+			puts("\n\n");
+			termios.c_lflag=lflag;
+			termios.c_cc[VMIN]=save0;
+			termios.c_cc[VTIME]=save1;
+			tcsetattr(fileno(stdin), TCSANOW, &termios);
+			if(tolower(buf)!='y') {
+				fprintf(stderr,
+"No user confirmation, aborting.\n");
+				ret=64;
+				goto abort;
+			}
+		}
+
+		printf(
+"Preparing active write operation, hit control-C to abort...\n");
 
 		do {
 			printf("%d seconds %c", count, count?'\r':'\n');
 			fflush(stdout);
 			sleep(1);
 		} while(count--);
+
+		puts("\n\n");
 	}
 
 	if(verbose>=10) fprintf(stderr, "DEBUG: Entering action switch\n");
