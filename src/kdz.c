@@ -1,5 +1,5 @@
 /* **********************************************************************
-* Copyright (C) 2017 Elliott Mitchell					*
+* Copyright (C) 2017-2018 Elliott Mitchell				*
 *									*
 *	This program is free software: you can redistribute it and/or	*
 *	modify it under the terms of the GNU General Public License as	*
@@ -25,6 +25,8 @@
 #include <endian.h>
 #include <sys/mman.h>
 #include <linux/fs.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <zlib.h>
@@ -44,16 +46,30 @@ const char dz_file_magic[DZ_MAGIC_LEN]={0x32, 0x96, 0x18, 0x74};
 
 const char dz_chunk_magic[DZ_MAGIC_LEN]={0x30, 0x12, 0x95, 0x78};
 
+/* the unpack context structure */
+struct unpackctx {
+	unsigned valid:1, z_finished:1, fail:1;
+	const struct kdz_file *kdz;
+	unsigned chunk;
+	MD5_CTX md5;
+	long crc;
+	z_stream zstr;
+};
 
-static voidpf zalloc(void *ignore, uInt items, uInt size)
-{
-	return calloc(items, size);
-}
 
-static void zfree(void *ignore, void *addr)
-{
-	free(addr);
-}
+/* open the appropriate device (flags=O_RDONLY or O_RDWR, most often) */
+static int open_device(const struct kdz_file *kdz, int dev, int flags);
+
+/* initialize the unpacking context */
+static bool unpackchunk_alloc(struct unpackctx *ctx,
+const struct kdz_file *const kdz, const unsigned chunk);
+
+/* retrieve uncompressed data from the chunk, returns bytes in buffer */
+static int unpackchunk(struct unpackctx *ctx, void *buf, size_t bufsz);
+
+/* perform the chunk verification steps */
+static bool unpackchunk_free(struct unpackctx *const ctx, bool discard);
+
 
 
 struct kdz_file *open_kdzfile(const char *filename)
@@ -70,6 +86,14 @@ struct kdz_file *open_kdzfile(const char *filename)
 	MD5_CTX md5;
 	char md5out[16];
 	int devs=-1;
+
+	unsigned le32offs[]={
+		&dz.major	-(uint32_t *)&dz,
+		&dz.minor	-(uint32_t *)&dz,
+		&dz.chunk_count	-(uint32_t *)&dz,
+		&dz.flag_mmc	-(uint32_t *)&dz,
+		&dz.flag_ufs	-(uint32_t *)&dz,
+	};
 
 	if((fd=open(filename, O_RDONLY|O_LARGEFILE))<0) {
 		perror("failed open()ing file");
@@ -113,7 +137,12 @@ struct kdz_file *open_kdzfile(const char *filename)
 		goto abort;
 	}
 
-	chunks=le32toh(dz.chunk_count);
+	for(i=0; i<sizeof(le32offs)/sizeof(le32offs[0]); ++i) {
+		uint32_t *tmp=(uint32_t *)&dz;
+		tmp[le32offs[i]]=le32toh(tmp[le32offs[i]]);
+	}
+
+	chunks=dz.chunk_count;
 
 	if(!(ret=malloc(sizeof(*ret)))) {
 		perror("memory allocation failure");
@@ -129,10 +158,7 @@ struct kdz_file *open_kdzfile(const char *filename)
 	ret->off=le64toh(kdz->off);
 
 	memcpy(&ret->dz_file, &dz, sizeof(struct dz_file));
-	ret->dz_file.major=le32toh(dz.major);
-	ret->dz_file.minor=le32toh(dz.minor);
-	ret->dz_file.reserved0=le32toh(dz.reserved0);
-	ret->dz_file.chunk_count=chunks;
+
 
 	if(chunks==0||chunks>(1<<20)) {
 		perror("chunk count isn't sane");
@@ -149,6 +175,8 @@ __func__, ret->dz_file.major, ret->dz_file.minor, ret->dz_file.device, chunks);
 	(*pMD5_Init)(&md5);
 
 	for(cur=ret->off, i=0; i<=chunks; ++i) {
+		struct dz_chunk *const dz=&ret->chunks[i].dz;
+
 		if(cur+sizeof(struct dz_chunk)>len) {
 			fprintf(stderr, "Next chunk starts beyond end of file!\n");
 			goto abort;
@@ -159,18 +187,18 @@ __func__, ret->dz_file.major, ret->dz_file.minor, ret->dz_file.device, chunks);
 			(*pMD5_Update)(&md5, map+cur, sizeof(struct dz_chunk));
 		memcpy(&ret->chunks[i].dz, map+cur, sizeof(struct dz_chunk));
 
-		ret->chunks[i].dz.target_size=le32toh(ret->chunks[i].dz.target_size);
-		ret->chunks[i].dz.data_size=le32toh(ret->chunks[i].dz.data_size);
-		ret->chunks[i].dz.target_addr=le32toh(ret->chunks[i].dz.target_addr);
-		ret->chunks[i].dz.trim_count=le32toh(ret->chunks[i].dz.trim_count);
-		ret->chunks[i].dz.device=le32toh(ret->chunks[i].dz.device);
+		dz->target_size=le32toh(dz->target_size);
+		dz->data_size=le32toh(dz->data_size);
+		dz->target_addr=le32toh(dz->target_addr);
+		dz->trim_count=le32toh(dz->trim_count);
+		dz->device=le32toh(dz->device);
 
-		if((int32_t)ret->chunks[i].dz.device>devs) devs=ret->chunks[i].dz.device;
+		if((int32_t)dz->device>devs) devs=dz->device;
 
 		if(verbose>=3)
 			fprintf(stderr, "DEBUG: Slice Name: \"%s\"\n", ret->chunks[i].dz.slice_name);
 
-		cur+=sizeof(struct dz_chunk)+ret->chunks[i].dz.data_size;
+		cur+=sizeof(struct dz_chunk)+dz->data_size;
 	}
 
 	(*pMD5_Final)((unsigned char *)md5out, &md5);
@@ -215,13 +243,7 @@ md5out[0xC], md5out[0xD], md5out[0xE], md5out[0xF]);
 	for(i=0; i<=devs; ++i) ret->devs[i].map=NULL;
 
 	for(i=0; i<=devs; ++i) {
-		char name[16];
-		snprintf(name, sizeof(name), "/dev/block/sd%c", (char)('a'+i));
-
-		if((fd=open(name, O_RDONLY|O_LARGEFILE))<0) {
-			perror("open");
-			goto abort;
-		}
+		if((fd=open_device(ret, i, O_RDONLY))<0) goto abort;
 
 		if(ioctl(fd, BLKSSZGET, &ret->devs[i].blksz)<0) {
 			perror("ioctl");
@@ -246,6 +268,8 @@ md5out[0xC], md5out[0xD], md5out[0xE], md5out[0xF]);
 		close(fd);
 	}
 
+	if(verbose>=9) fprintf(stderr, "DEBUG: KDZ file successfully opened\n");
+
 	return ret;
 
 abort:
@@ -264,6 +288,8 @@ abort:
 
 		free(ret);
 	}
+
+	if(verbose>=9) fprintf(stderr, "DEBUG: Failed to open KDZ file\n");
 	return NULL;
 }
 
@@ -303,80 +329,23 @@ off64_t offset)
 }
 
 
-static int zwrapper(z_streamp dst, int chunk, const char *chunkname, int flush)
-{
-	int ret=Z_OK;
-
-	if(!dst->total_in&&(ret=inflateInit(dst))!=Z_OK) {
-		fprintf(stderr, "inflateInit() failed: %s\n", dst->msg);
-		inflateEnd(dst);
-		return ret;
-	}
-
-	if(flush>Z_ERRNO) do {
-	restart:
-
-		switch(ret=inflate(dst, flush)) {
-		case Z_OK:
-			if(flush==Z_FINISH) goto restart;
-		case Z_STREAM_END:
-			break;
-		case Z_BUF_ERROR:
-			if(flush!=Z_FINISH) break;
-		default:
-			fprintf(stderr,
-"Chunk %d(%s): inflate() failed: %s\n", chunk, chunkname, dst->msg);
-			if(verbose>=3) fprintf(stderr,
-"DEBUG: inflate()=%d, @ %lu bytes of input, %lu bytes of output\n", ret,
-dst->total_in, dst->total_out);
-
-			return ret;
-
-		}
-
-	} while(dst->avail_out);
-
-	if(flush==Z_FINISH&&ret!=Z_STREAM_END) {
-		if((ret=inflate(dst, Z_FINISH))!=Z_STREAM_END) {
-			fprintf(stderr,
-"Chunk %d(%s): inflate failed to finish stream: %s\n", chunk, chunkname,
-dst->msg);
-			if(verbose>=3) fprintf(stderr,
-"DEBUG: inflate()=%d, @ %lu bytes of input, %lu bytes of output\n", ret,
-dst->total_in, dst->total_out);
-
-			/* this is odd, and bad */
-			ret=Z_ERRNO;
-		}
-	}
-
-	if(ret==Z_STREAM_END||flush<=Z_ERRNO) inflateEnd(dst);
-
-	return ret;
-}
-
-
+static int test_kdzfile_gpt_entry(int dev, int maxreturn,
+struct gpt_entry *kdzentry, struct gpt_entry *deventry);
 int test_kdzfile(struct kdz_file *kdz)
 {
 	int i;
 	int dev=-1;
 	off64_t blksz;
-	z_stream zstr={
-		.zalloc=zalloc,
-		.zfree=zfree,
-	};
-	MD5_CTX md5;
-	char md5out[16];
-	uint32_t crc;
+	struct unpackctx _ctx={0,}, *const ctx=&_ctx;
 	char *map=NULL;
 	char *buf=NULL;
 	uint32_t bufsz=0;
 	int maxreturn=3;
 	struct gpt_buf gpt_buf;
-	int zres=Z_OK;
 
 	for(i=1; i<=kdz->dz_file.chunk_count&&maxreturn>0; ++i) {
-		const char *slice_name=kdz->chunks[i].dz.slice_name;
+		const struct dz_chunk *const dz=&kdz->chunks[i].dz;
+		const char *const slice_name=dz->slice_name;
 		struct {
 			const char *name;
 			const short result;
@@ -400,7 +369,7 @@ int test_kdzfile(struct kdz_file *kdz)
 			{"msadp",		0x2}, /* worthwhile??? */
 			{"pmic",		0x2},
 			{"pmicbak",		0x2},
-			{"raw_resources",	0x3}, /* required */
+			{"raw_resources",	0x2}, /* required, mod cand */
 			{"raw_resourcesbak",	0x3}, /* required */
 			{"rpm",			0x2},
 			{"rpmbak",		0x2},
@@ -414,9 +383,9 @@ int test_kdzfile(struct kdz_file *kdz)
 		};
 		unsigned char lo=0, hi=sizeof(matches)/sizeof(matches[0]);
 		uint32_t cur=0;
-		bool mismatch=0;
+		bool mismatch=false;
 		enum gpt_type gpt_type;
-		struct gpt_data *gptdev, *gptkdz;
+		struct gpt_data *gptdev, *gptdev2, *gptkdz;
 		int res, mid;
 		int ii;
 
@@ -430,8 +399,8 @@ int test_kdzfile(struct kdz_file *kdz)
 		if(!(maxreturn&matches[mid].result)) continue;
 
 
-		if(kdz->chunks[i].dz.device!=dev) {
-			dev=kdz->chunks[i].dz.device;
+		if(dz->device!=dev) {
+			dev=dz->device;
 
 			blksz=kdz->devs[dev].blksz;
 			if(bufsz!=blksz*5) {
@@ -447,58 +416,22 @@ int test_kdzfile(struct kdz_file *kdz)
 			map=kdz->devs[dev].map;
 		}
 
+		if(!unpackchunk_alloc(ctx, kdz, i)) goto abort;
 
-		(*pMD5_Init)(&md5);
-		crc=crc32(0, Z_NULL, 0);
-
-		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
-		zstr.avail_in=kdz->chunks[i].dz.data_size;
-		zstr.total_in=zstr.total_out=0;
-
-		if(kdz->chunks[i].dz.target_size%blksz) {
-			fprintf(stderr, "Block, not a multiple of block size!\n");
-			goto abort;
-		}
-
-
-		while(cur<kdz->chunks[i].dz.target_size) {
-			uint32_t cmp=kdz->chunks[i].dz.target_size-cur;
+		while(cur<dz->target_size) {
+			uint32_t cmp=dz->target_size-cur;
 			if(cmp>bufsz) cmp=bufsz;
 
-			zstr.next_out=(unsigned char *)buf;
-			zstr.avail_out=cmp;
-
-			switch(zres=zwrapper(&zstr, i,
-kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
-			case Z_OK:
-			case Z_STREAM_END:
-				break;
-			default:
-				goto abort;
-			}
-
-			(*pMD5_Update)(&md5, buf, cmp);
-			crc=crc32(crc, (Bytef *)buf, cmp);
+			if(unpackchunk(ctx, buf, cmp)<=0) goto abort;
 
 			/* keep going to verify the CRC and MD5 */
 			if(!mismatch&&
-memcmp(map+kdz->chunks[i].dz.target_addr*blksz+cur, buf, cmp)) mismatch=1;
+memcmp(map+dz->target_addr*blksz+cur, buf, cmp)) mismatch=1;
 
 			cur+=cmp;
 		}
 
-		if(zres!=Z_STREAM_END&&zwrapper(&zstr, i,
-kdz->chunks[i].dz.slice_name, Z_FINISH)!=Z_STREAM_END) {
-			zres=Z_STREAM_END; /* already refused */
-			goto abort;
-		}
-
-		(*pMD5_Final)((unsigned char *)md5out, &md5);
-
-		if(crc!=le32toh(kdz->chunks[i].dz.crc32)) goto abort;
-
-		if(memcmp(md5out, kdz->chunks[i].dz.md5, sizeof(md5out)))
-			goto abort;
+		if(!unpackchunk_free(ctx, false)) goto abort;
 
 		/* exact match, nothing to worry about */
 		if(!mismatch) continue;
@@ -511,49 +444,31 @@ kdz->chunks[i].dz.slice_name, Z_FINISH)!=Z_STREAM_END) {
 		}
 
 /* special-case match for GPTs:
-** the type-UUIDs *must* match, but Id-UUIDs can differ.
-** for sda, the border between OP and userdata does in fact differ for
-** reason unknown.  For sdg, the types differ even for perfect match KDZ. */
+** The type-UUIDs *must* match, but Id-UUIDs can differ.  For sda, the border
+** between OP and userdata normally differs due to varying amounts of LGE
+** bloatware.  A tool to remove OP exists, and LineageOS is likely to modify
+** system area.  For sdg, the types differ even for perfect match KDZ. */
 
-		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
-		zstr.avail_in=kdz->chunks[i].dz.data_size;
-		zstr.total_in=zstr.total_out=0;
+		if(!unpackchunk_alloc(ctx, kdz, i)) goto abort;
 
-		if(kdz->chunks[i].dz.target_addr<=3) gpt_type=GPT_PRIMARY;
+		if(dz->target_addr<=3) gpt_type=GPT_PRIMARY;
 		else {
 			gpt_type=GPT_BACKUP;
 			cur=0;
 			/* chew off enough for the remainder to fill buffer */
-			while(kdz->chunks[i].dz.target_size-cur>bufsz) {
-				zstr.next_out=(unsigned char *)buf;
-				zstr.avail_out=kdz->chunks[i].dz.target_size-bufsz-cur;
-				if(zstr.avail_out>bufsz) zstr.avail_out=bufsz;
+			while(dz->target_size-cur>bufsz) {
+				size_t next=dz->target_size-bufsz-cur;
+				if(next>bufsz) next=bufsz;
 
-
-				switch(zres=zwrapper(&zstr, i,
-kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
-				case Z_OK:
-				case Z_STREAM_END:
-					break;
-				default:
+				if(unpackchunk(ctx, buf, next)<=0)
 					goto abort;
-				}
+
 			}
 		}
 
-		zstr.next_out=(unsigned char *)buf;
-		zstr.avail_out=bufsz;
+		if(unpackchunk(ctx, buf, bufsz)<=0) goto abort;
 
-		switch(zres=zwrapper(&zstr, i,
-kdz->chunks[i].dz.slice_name, gpt_type==GPT_PRIMARY?Z_SYNC_FLUSH:Z_STREAM_END)){
-		case Z_OK:
-			if(gpt_type==GPT_BACKUP) goto abort;
-			inflateEnd(&zstr);
-		case Z_STREAM_END:
-			break;
-		default:
-			goto abort;
-		}
+		if(!unpackchunk_free(ctx, gpt_type==GPT_PRIMARY)) goto abort;
 
 
 		/* load the corresponding device GPT */
@@ -571,20 +486,20 @@ gpt_type==GPT_PRIMARY?"primary":"backup", 'a'+dev);
 		gpt_buf.bufsz=kdz->devs[dev].len;
 		gpt_buf.buf=kdz->devs[dev].map;
 
-		if(!(gptkdz=readgptb(gptbuffunc, &gpt_buf, blksz, gpt_type==GPT_BACKUP?GPT_PRIMARY:GPT_BACKUP))) {
+		if(!(gptdev2=readgptb(gptbuffunc, &gpt_buf, blksz, gpt_type==GPT_BACKUP?GPT_PRIMARY:GPT_BACKUP))) {
 			fprintf(stderr, "Failed reading %s sd%c GPT\n",
 gpt_type==GPT_BACKUP?"primary":"backup", 'a'+dev);
 			free(gptdev);
 			goto abort;
 		}
 
-		if(!comparegpt(gptdev, gptkdz)) {
+		if(!comparegpt(gptdev, gptdev2)) {
 			free(gptdev);
-			free(gptkdz);
+			free(gptdev2);
 			goto abort;
 		}
 
-		free(gptkdz);
+		free(gptdev2);
 
 
 		/* load the KDZ GPT */
@@ -615,38 +530,10 @@ memcmp(&gptdev->head.dataStartLBA, &gptkdz->head.dataStartLBA,
 gptkdz->head.altLBA!=1&&gptdev->head.altLBA!=gptkdz->head.myLBA)
 			maxreturn=0;
 
-		for(ii=0; ii<gptdev->head.entryCount-1&&maxreturn>0; ++ii) {
-			if(gptdev->entry[ii].flags!=gptkdz->entry[ii].flags||
-uuid_compare(gptdev->entry[ii].type, gptkdz->entry[ii].type)||
-strncmp(gptdev->entry[ii].name, gptkdz->entry[ii].name, sizeof(gptdev->entry[ii].name))) {
-				maxreturn=0;
-				break;
-			}
 
-			/* the Ids always differ on sdg */
-			if(maxreturn&2&&dev!=6&&
-uuid_compare(gptdev->entry[ii].id, gptkdz->entry[ii].id)) maxreturn&=~2;
-
-
-			/* on-device border between OP and userdata differs */
-			if(gptdev->entry[ii].startLBA!=gptkdz->entry[ii].startLBA)
-				if(strcmp(gptdev->entry[ii].name, "userdata")||
-ii<=0||strcmp(gptdev->entry[ii-1].name, "OP")||
-gptdev->entry[ii].startLBA!=gptdev->entry[ii-1].endLBA+1||
-gptkdz->entry[ii].startLBA!=gptkdz->entry[ii-1].endLBA+1) {
-					maxreturn=0;
-					break;
-				}
-
-			if(gptdev->entry[ii].endLBA!=gptkdz->entry[ii].endLBA)
-				if(strcmp(gptdev->entry[ii].name, "OP")||
-ii>=gptdev->head.entryCount-1||strcmp(gptdev->entry[ii+1].name, "userdata")||
-gptdev->entry[ii].endLBA!=gptdev->entry[ii+1].startLBA-1||
-gptkdz->entry[ii].endLBA!=gptkdz->entry[ii+1].startLBA-1) {
-					maxreturn=0;
-					break;
-				}
-		}
+		for(ii=0; ii<gptdev->head.entryCount-1&&maxreturn>0; ++ii)
+			maxreturn=test_kdzfile_gpt_entry(dev, maxreturn,
+gptkdz->entry+ii, gptdev->entry+ii);
 
 		free(gptdev);
 		free(gptkdz);
@@ -667,9 +554,63 @@ abort:
 	/* map will only be non-NULL after mmap(), by which time mlen!=0 */
 	if(buf) free(buf);
 
-	if(zres!=Z_STREAM_END) zwrapper(&zstr, 0, "aborting", Z_FINISH);
+	unpackchunk_free(ctx, true);
 
 	return -1;
+}
+
+static int test_kdzfile_gpt_entry(int dev, int maxreturn,
+struct gpt_entry *kdzentry, struct gpt_entry *deventry)
+{
+	const char *const ignore[]={
+		"",
+		"OP",
+		"cache",
+		"cust",
+		"grow",
+		"grow2",
+		"grow3",
+		"grow4",
+		"grow5",
+		"grow6",
+		"grow7",
+		"system",
+		"userdata",
+	};
+	unsigned char lo=0, hi=sizeof(ignore)/sizeof(ignore[0]);
+	int res, mid;
+
+
+	while(mid=(hi+lo)/2, res=strcmp(kdzentry->name, ignore[mid])) {
+		if(res<0) hi=mid;
+		else if(res>0) lo=mid+1;
+		if(lo==hi) {
+			mid=-1; /* run all tests */
+			break;
+		}
+	}
+
+	/* ignore slices which are likely to be modified by LineageOS or LGE */
+	if(mid>=0) return maxreturn;
+
+	/* check name, flags, and type */
+	if(deventry->flags!=kdzentry->flags||
+uuid_compare(deventry->type, kdzentry->type)||
+strncmp(deventry->name, kdzentry->name, sizeof(deventry->name)))
+		return 0;
+
+	/* the Ids always differ on sdg */
+	if(maxreturn&2&&dev!=6&&
+uuid_compare(deventry->id, kdzentry->id)) maxreturn&=~2;
+
+	/* question is whether to try the above tests on non-empty entries? */
+
+	/* on-device border between OP and userdata differs */
+	if(deventry->startLBA!=kdzentry->startLBA||
+deventry->endLBA!=kdzentry->endLBA)
+		return 0;
+
+	return maxreturn;
 }
 
 
@@ -678,25 +619,21 @@ int report_kdzfile(struct kdz_file *kdz)
 	int i;
 	int dev=-1;
 	off64_t blksz;
-	z_stream zstr={
-		.zalloc=zalloc,
-		.zfree=zfree,
-	};
-	MD5_CTX md5;
-	char md5out[16];
-	uint32_t crc;
+	struct unpackctx _ctx={0,}, *const ctx=&_ctx;
 	char *map=NULL;
 	char *buf=NULL;
 	uint32_t bufsz=0;
 	uint32_t cur;
 	uint32_t mismatch;
-	int zres=Z_OK;
+
+	if(verbose>=11) fprintf(stderr, "DEBUG: starting report code\n");
 
 	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
 		const char *fmt;
+		const struct dz_chunk *const dz=&kdz->chunks[i].dz;
 
-		if(kdz->chunks[i].dz.device!=dev) {
-			dev=kdz->chunks[i].dz.device;
+		if(dz->device!=dev) {
+			dev=dz->device;
 
 			blksz=kdz->devs[dev].blksz;
 
@@ -713,66 +650,40 @@ int report_kdzfile(struct kdz_file *kdz)
 			map=kdz->devs[dev].map;
 		}
 
-		(*pMD5_Init)(&md5);
-		crc=crc32(0, Z_NULL, 0);
-
-		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
-		zstr.avail_in=kdz->chunks[i].dz.data_size;
-		zstr.total_in=zstr.total_out=0;
+		if(!unpackchunk_alloc(ctx, kdz, i)) goto abort;
 
 		mismatch=0;
 
 
 
-		if(kdz->chunks[i].dz.target_size%blksz) {
+		if(dz->target_size%blksz) {
 			fprintf(stderr, "Block, not a multiple of block size!\n");
 		}
 
 		cur=0;
 
-		while(cur<kdz->chunks[i].dz.target_size) {
-			int zres;
-
-			zstr.next_out=(unsigned char *)buf;
-			zstr.avail_out=bufsz;
-
-			switch(zres=zwrapper(&zstr, i,
-kdz->chunks[i].dz.slice_name, Z_SYNC_FLUSH)) {
-			case Z_OK:
-			case Z_STREAM_END:
-				break;
-			default:
+		while(cur<dz->target_size) {
+			if(unpackchunk(ctx, buf, bufsz)!=bufsz)
 				goto abort_block;
-			}
 
-			(*pMD5_Update)(&md5, buf, bufsz);
-			crc=crc32(crc, (Bytef *)buf, bufsz);
-
-			if(memcmp(map+kdz->chunks[i].dz.target_addr*blksz+cur,
-buf, blksz)) ++mismatch;
+			if(memcmp(map+dz->target_addr*blksz+cur, buf, blksz))
+				++mismatch;
 
 			cur+=blksz;
 		}
 
-		(*pMD5_Final)((unsigned char *)md5out, &md5);
-
-		if(crc!=le32toh(kdz->chunks[i].dz.crc32))
-			printf("Chunk %d(%s): CRC32 mismatch!\n", i, kdz->chunks[i].dz.slice_name);
-
-		if(memcmp(md5out, kdz->chunks[i].dz.md5, sizeof(md5out)))
-			printf("Chunk %d(%s): MD5 mismatch!\n", i, kdz->chunks[i].dz.slice_name);
+		if(!unpackchunk_free(ctx, false))
+			++mismatch; /* not exactly, but sort of */
 
 		if(mismatch)
 			fmt="Chunk %1$d(%2$s): %7$d of %3$ld blocks mismatched (%4$lu-%5$lu,trim=%6$lu)\n";
 		else
 			fmt="Chunk %d(%s): all %ld blocks matched (%lu-%lu,trim=%lu)\n";
-		printf(fmt, i, kdz->chunks[i].dz.slice_name,
-kdz->chunks[i].dz.target_size/blksz, kdz->chunks[i].dz.target_addr,
-kdz->chunks[i].dz.target_addr+kdz->chunks[i].dz.trim_count,
-kdz->chunks[i].dz.trim_count, mismatch);
+		printf(fmt, i, dz->slice_name, dz->target_size/blksz,
+dz->target_addr, dz->target_addr+dz->trim_count, dz->trim_count, mismatch);
 
 	abort_block:
-		zwrapper(&zstr, 0, "aborting", Z_ERRNO);
+		unpackchunk_free(ctx, true);
 	}
 
 	free(buf);
@@ -782,24 +693,233 @@ kdz->chunks[i].dz.trim_count, mismatch);
 abort:
 	if(buf) free(buf);
 
-	if(zres!=Z_STREAM_END) zwrapper(&zstr, 0, "aborting", Z_ERRNO);
+	unpackchunk_free(ctx, true);
 
 	return 128;
 }
 
 
-int write_kdzfile(struct kdz_file *kdz, const char *const slice_name,
-bool simulate)
+bool fix_gpts(const struct kdz_file *kdz, const bool simulate)
+{
+	int i, j;
+	int dev=-1;
+	struct unpackctx _ctx={0,}, *const ctx=&_ctx;
+	size_t bufsz=4096;
+	char *buf=NULL;
+	struct gpt_data *gptkdz=NULL;
+	int fd;
+	unsigned long long opsz;
+	bool ret=true;
+
+	if(!(buf=malloc(bufsz))) return false;
+
+	if(access("/dev/block/bootdevice/by-name/cust", F_OK)<0) {
+		fprintf(stderr,
+"Cannot access /dev/block/bootdevice/by-name, assuming OP size of 0.\n");
+		opsz=0;
+	} else {
+		if(mkdir("/cust", 0777)<0) {
+			struct stat buf;
+			if(errno!=EEXIST) {
+				fprintf(stderr,
+"Failed to create /cust mount point: %s\n", strerror(errno));
+				goto abort;
+			}
+			if(stat("/cust", &buf)<0||!S_ISDIR(buf.st_mode)) {
+				fprintf(stderr,
+"Failed when creating /cust mount point, unable to continue\n");
+				goto abort;
+			}
+			/* this could mean we were run recently... */
+			umount("/cust");
+		}
+
+		if(mount("/dev/block/bootdevice/by-name/cust", "/cust",
+"ext4", MS_RDONLY, "discard")) {
+			fprintf(stderr,
+"Failed OP resize data retrieval: %s\n", strerror(errno));
+			goto abort;
+		}
+
+		if((fd=open("/cust/official_op_resize.cfg",
+O_RDONLY|MS_NOATIME))<0) {
+			fprintf(stderr,
+"Unable to open official_op_resize.cfg: %s\n", strerror(errno));
+			umount("/cust");
+			goto abort;
+		}
+
+		if(read(fd, buf, bufsz)<0) {
+			fprintf(stderr,
+"Failed during read of official_op_resize.cfg: %s\n", strerror(errno));
+			opsz=0;
+		} else {
+			buf[bufsz-1]='\0';
+
+			i=strchr(buf, '=')-buf+1;
+
+			opsz=strtoull(buf+i, NULL, 0);
+		}
+
+		if(verbose>=1) fprintf(stderr,
+"official_op_resize.cfg makes /OP %llu bytes\n", opsz);
+
+		close(fd);
+		umount("/cust");
+	}
+
+
+	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
+		const struct dz_chunk *const dz=&kdz->chunks[i].dz;
+		uint32_t blksz;
+		struct gpt_buf gpt_buf;
+
+		if(strcmp(dz->slice_name, "PrimaryGPT")) continue;
+
+		if((dev=open_device(kdz, dz->device, O_RDWR))<0) goto abort;
+
+		blksz=kdz->devs[dz->device].blksz;
+
+
+		if(dz->target_size>bufsz) {
+			free(buf);
+			bufsz=dz->target_size;
+			if(!(buf=malloc(bufsz))) {
+				fprintf(stderr, "Memory allocation failure.\n");
+				goto abort;
+			}
+		}
+
+		if(!unpackchunk_alloc(ctx, kdz, i)) goto abort;
+
+		if(unpackchunk(ctx, buf, dz->target_size)!=dz->target_size)
+			goto abort;
+
+		if(!unpackchunk_free(ctx, false)) goto abort;
+
+		gpt_buf.bufsz=dz->target_size;
+		gpt_buf.buf=buf;
+		if(!(gptkdz=readgptb(gptbuffunc, &gpt_buf, blksz, GPT_PRIMARY))) {
+			fprintf(stderr,
+"Failed to load GPT from primary image in KDZ, aborting.\n");
+			goto abort;
+		}
+
+
+		for(j=0; j<gptkdz->head.entryCount; ++j) {
+			int64_t delta;
+			uint32_t start, end;
+			struct gpt_entry *const kdzentr=gptkdz->entry+j;
+
+			if(!strcmp("persistent", kdzentr->name)) {
+				struct gpt_data *gptdev=NULL;
+
+				gpt_buf.bufsz=kdz->devs[dz->device].len;
+				gpt_buf.buf=kdz->devs[dz->device].map;
+				gptdev=readgptb(gptbuffunc, &gpt_buf, blksz,
+GPT_ANY);
+
+				if(gptdev&&!uuid_is_null(gptdev->entry[j].id))
+					uuid_copy(kdzentr->id, gptdev->entry[j].id);
+
+				else {
+					int urandom;
+					urandom=open("/dev/urandom", O_RDONLY);
+
+					/* I'm guessing this is appropriate */
+					/* if this fails, well can't do much */
+					if(urandom>=0) {
+						read(urandom, &kdzentr->id, sizeof(kdzentr->id));
+						close(urandom);
+					}
+				}
+
+				if(gptdev) free(gptdev);
+			}
+
+			if(strcmp("OP", kdzentr->name)) continue;
+
+			/* convert to block count */
+			delta=opsz/blksz;
+
+			/* oddly OP in KDZ files is non-zero size */
+			delta-=(kdzentr->endLBA-kdzentr->startLBA+1);
+
+			start=end=j;
+			if(!strcmp("userdata", gptkdz->entry[j-1].name)) {
+				if(verbose>=7) fprintf(stderr,
+"DEBUG: userdata before OP, userdata end=%lu, OP begin=%lu\n",
+gptkdz->entry[j-1].endLBA, kdzentr->startLBA);
+				if(gptkdz->entry[j-1].endLBA+1!=kdzentr->startLBA) continue;
+				--end;
+				delta=-delta;
+			} else if(!strcmp("userdata", gptkdz->entry[j+1].name)) {
+				if(verbose>=7) fprintf(stderr,
+"DEBUG: OP before userdata, userdata begin=%lu, OP end=%lu\n",
+gptkdz->entry[j+1].startLBA, kdzentr->endLBA);
+				if(gptkdz->entry[j+1].startLBA!=kdzentr->endLBA+1) continue;
+				++start;
+			} else continue;
+			if(verbose>=4) fprintf(stderr,
+"DEBUG: OP: start idx %u end idx %u, delta=%+ld\n", start, end, delta);
+			gptkdz->entry[start].startLBA+=delta;
+			gptkdz->entry[end].endLBA+=delta;
+			if(verbose>=4) fprintf(stderr,
+"DEBUG: OP: new start %lu, new end %lu\n", gptkdz->entry[start].startLBA,
+gptkdz->entry[end].endLBA);
+
+			/* Yes, they ARE this perverse; adjust userdata first */
+			if(opsz<=0)
+				memset(kdzentr, 0, sizeof(struct gpt_entry));
+		}
+
+		if(!simulate) {
+			if(!writegpt(dev, gptkdz)) {
+				fprintf(stderr, "\bGPT write operation failed!\n");
+				goto abort;
+			}
+
+			/* the GPT code ignores the first block */
+			if(memcmp(buf, kdz->devs[dz->device].map, 512))
+				pwrite(dev, buf, 512, 0);
+		} else close(dev);
+
+		free(gptkdz);
+		gptkdz=NULL;
+
+		if(!simulate) {
+			/* failure indicates kernel may be using old table */
+#ifndef DEBUG
+			if(ioctl(dev, BLKRRPART, NULL)) {
+				if(verbose>=7) fprintf(stderr,
+"ioctl(BLKRRPART) failed, kernel still uses old GPT\n");
+				ret=false;
+			}
+#endif
+		}
+	}
+
+	return ret;
+
+abort:
+	if(buf) free(buf);
+
+	if(gptkdz) free(gptkdz);
+
+	if(dev>=0) close(dev);
+
+	unpackchunk_free(ctx, true);
+
+	return false;
+}
+
+
+int write_kdzfile(const struct kdz_file *const kdz,
+const char *const slice_name, const bool simulate)
 {
 	int i, j;
 	int dev;
-	z_stream zstr={
-		.zalloc=zalloc,
-		.zfree=zfree,
-	};
-	MD5_CTX md5;
-	char md5out[16];
-	uint32_t crc;
+	struct unpackctx _ctx={0,}, *const ctx=&_ctx;
 	size_t bufsz=0;
 	char *buf=NULL;
 	off64_t offset;
@@ -807,7 +927,6 @@ bool simulate)
 	int fd=-1;
 	uint64_t blksz;
 	short wrote=0, skip=0;
-	int zres=Z_OK;
 
 	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
 		struct gpt_data *gptdev;
@@ -849,17 +968,17 @@ bool simulate)
 
 
 	{
-		/* on Linux O_EXCL refuses if mounted */
-		int flags=O_LARGEFILE|O_EXCL;
+		int flags=O_LARGEFILE;
 		char name[64];
-		if(!simulate) flags|=O_WRONLY;
+		/* on Linux O_EXCL refuses if mounted */
+		if(!simulate) flags|=O_EXCL|O_WRONLY;
 		snprintf(name, sizeof(name), "/dev/block/bootdevice/by-name/%s",
 slice_name);
 
 		if((fd=open(name, flags))<0) {
 			const char *fmt;
 			if(errno==EBUSY) fmt="\"%s\" mounted, refusing to continue\n";
-			else fmt="Failed to open \"%s\": %s";
+			else fmt="Failed to open \"%s\": %s\n";
 
 			fprintf(stderr, fmt, name, strerror(errno));
 			return 0;
@@ -868,18 +987,19 @@ slice_name);
 
 
 	for(; i<=kdz->dz_file.chunk_count; ++i) {
+		const struct dz_chunk *const dz=&kdz->chunks[i].dz;
 		uint64_t range[2];
 
 		/* obviously skip other slices */
-		if(strcmp(slice_name, kdz->chunks[i].dz.slice_name)) continue;
+		if(strcmp(slice_name, dz->slice_name)) continue;
 
-		if(dev!=kdz->chunks[i].dz.device) { /* trouble! */
+		if(dev!=dz->device) { /* trouble! */
 			fprintf(stderr, "PANIC: \"%s\"'s chunks cross multiple devices?!\n", slice_name);
 			goto abort;
 		}
 
-		if(bufsz<kdz->chunks[i].dz.target_size) {
-			bufsz=kdz->chunks[i].dz.target_size;
+		if(bufsz<dz->target_size) {
+			bufsz=dz->target_size;
 			free(buf);
 			if(!(buf=malloc(bufsz))) {
 				fprintf(stderr, "Memory allocation failure!\n");
@@ -888,48 +1008,19 @@ slice_name);
 		}
 
 
-		if(kdz->chunks[i].dz.target_size%blksz) {
-			fprintf(stderr, "Block, not a multiple of block size!\n");
+		if(!unpackchunk_alloc(ctx, kdz, i)) goto abort;
+
+		if(unpackchunk(ctx, buf, dz->target_size)!=dz->target_size)
 			goto abort;
-		}
 
-
-		(*pMD5_Init)(&md5);
-		crc=crc32(0, Z_NULL, 0);
-
-		zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[i].zoff);
-		zstr.avail_in=kdz->chunks[i].dz.data_size;
-		zstr.total_in=zstr.total_out=0;
-
-
-		zstr.next_out=(unsigned char *)buf;
-		zstr.avail_out=kdz->chunks[i].dz.target_size;
-
-		if((zres=zwrapper(&zstr, i, slice_name,
-Z_FINISH))!=Z_STREAM_END) goto abort;
-
-		(*pMD5_Update)(&md5, buf, kdz->chunks[i].dz.target_size);
-		crc=crc32(crc, (Bytef *)buf, kdz->chunks[i].dz.target_size);
-
-
-		(*pMD5_Final)((unsigned char *)md5out, &md5);
-
-		if(crc!=le32toh(kdz->chunks[i].dz.crc32)) {
-			fprintf(stderr, "Chunk %d CRC-32 mismatch!\n", i);
-			goto abort;
-		}
-
-		if(memcmp(md5out, kdz->chunks[i].dz.md5, sizeof(md5out))) {
-			fprintf(stderr, "Chunk %d MD5 mismatch!\n", i);
-			goto abort;
-		}
+		if(!unpackchunk_free(ctx, false)) goto abort;
 
 
 		if(verbose>=3) fprintf(stderr, "DEBUG: chunk %u\n", i);
 
 		/* write the device while trying to keep wear to a minimum */
-		for(j=0; j<kdz->chunks[i].dz.target_size; j+=blksz) {
-			uint64_t target=kdz->chunks[i].dz.target_addr*blksz+j;
+		for(j=0; j<dz->target_size; j+=blksz) {
+			uint64_t target=dz->target_addr*blksz+j;
 
 			if(!memcmp(buf+j, kdz->devs[dev].map+target, blksz)) {
 
@@ -962,11 +1053,9 @@ Z_FINISH))!=Z_STREAM_END) goto abort;
 		/* Note, this is being done on the slice, so slice-relative */
 
 		/* start byte */
-		range[0]=kdz->chunks[i].dz.target_addr*blksz-offset+
-kdz->chunks[i].dz.target_size;
+		range[0]=dz->target_addr*blksz-offset+dz->target_size;
 
-		range[1]=kdz->chunks[i].dz.trim_count*blksz-
-kdz->chunks[i].dz.target_size;
+		range[1]=dz->trim_count*blksz-dz->target_size;
 
 
 		if(verbose>=3) fprintf(stderr,
@@ -979,7 +1068,8 @@ range[1]/blksz, range[0], range[0]/blksz);
 
 		/* do the deed (sanity check, and not simulating) */
 		if(range[1]>0&&range[1]<((uint64_t)1<<40)&&!simulate)
-			ioctl(fd, BLKDISCARD, range);
+			if(ioctl(fd, BLKDISCARD, range)<0&&verbose>=1)
+fprintf(stderr, "Discard failed: %s\n", strerror(errno));
 	}
 
 	if(fd>=0) close(fd);
@@ -990,11 +1080,196 @@ range[1]/blksz, range[0], range[0]/blksz);
 	return 1;
 
 abort:
+	unpackchunk_free(ctx, true);
+
 	if(fd>=0) close(fd);
 	if(buf) free(buf);
 
 	if(verbose<3) putchar('\n');
 
 	return 0;
+}
+
+
+static int open_device(const struct kdz_file *kdz, int dev, int flags)
+{
+	char name[32];
+	const char *fmt;
+	char unit;
+#ifdef DEBUG
+	if((flags&O_RDWR)==O_RDWR||(flags&O_WRONLY)==O_WRONLY) {
+		fmt="/sd%c";
+		unit='a';
+	} else
+#endif
+	if((kdz->dz_file.flag_ufs&256)==256) {
+		fmt="/dev/block/sd%c";
+		unit='a';
+	} else {
+		fmt="/dev/block/mmcblk%c";
+		unit='0';
+	}
+	snprintf(name, sizeof(name), fmt, unit+dev);
+
+	if(verbose>=5) {
+		switch(flags&O_ACCMODE) {
+		case O_RDONLY:
+			fmt="reading";
+			break;
+		case O_RDWR:
+		default:
+			fmt="read-write";
+			break;
+		case O_WRONLY:
+			fmt="writing";
+			break;
+		}
+		fprintf(stderr, "DEBUG: Opening %s, for %s (flags=%d)\n",
+name, fmt, flags);
+	}
+
+#ifdef DISABLE_WRITES
+	flags&=~O_RDWR&~O_WRONLY;
+#endif
+
+	if((dev=open(name, flags|O_LARGEFILE))<0) {
+		perror("open");
+	}
+
+	return dev;
+}
+
+
+static bool unpackchunk_alloc(struct unpackctx *const ctx,
+const struct kdz_file *const kdz, const unsigned chunk)
+{
+	const struct dz_chunk *const dz=&kdz->chunks[chunk].dz;
+
+	if(verbose>=12) fprintf(stderr, "DEBUG: %s called\n", __func__);
+
+	if(dz->target_size%kdz->devs[dz->device].blksz) {
+		fprintf(stderr, "Block, not a multiple of block size!\n");
+		return false;
+	}
+
+	ctx->kdz=kdz;
+	ctx->chunk=chunk;
+
+
+	/* initializing Zlib */
+	ctx->zstr.zalloc=Z_NULL;
+	ctx->zstr.zfree=Z_NULL;
+
+	ctx->zstr.next_in=(Bytef *)(kdz->map+kdz->chunks[chunk].zoff);
+	ctx->zstr.avail_in=dz->data_size;
+	ctx->zstr.total_in=0;
+	ctx->zstr.avail_out=0;
+	ctx->zstr.total_out=0;
+
+	if(inflateInit(&ctx->zstr)!=Z_OK) {
+		fprintf(stderr, "inflateInit() failed: %s\n", ctx->zstr.msg);
+		inflateEnd(&ctx->zstr);
+		return false;
+        }
+
+	ctx->z_finished=0;
+
+	ctx->fail=0;
+
+
+	/* libcrypto's MD5 */
+	(*pMD5_Init)(&ctx->md5);
+
+	/* Zlib's CRC32 */
+	ctx->crc=crc32(0, Z_NULL, 0);
+
+
+	/* lastly mark as initialized */
+	ctx->valid=1;
+
+
+	return true;
+}
+
+
+static int unpackchunk(struct unpackctx *const ctx, void *buf, size_t bufsz)
+{
+	const struct dz_chunk *const dz=&ctx->kdz->chunks[ctx->chunk].dz;
+	int zret;
+
+	if(verbose>=12) fprintf(stderr, "DEBUG: %s called\n", __func__);
+
+	ctx->zstr.next_out=(unsigned char *)buf;
+	ctx->zstr.avail_out=bufsz;
+
+	if(ctx->z_finished) return 0;
+
+	switch((zret=inflate(&ctx->zstr, Z_SYNC_FLUSH))) {
+	case Z_STREAM_END:
+		ctx->z_finished=1;
+	case Z_OK:
+		break;
+	default:
+		fprintf(stderr, "Chunk %d(%s): inflate() failed: %s\n",
+ctx->chunk, dz->slice_name, ctx->zstr.msg);
+		if(verbose>=3) fprintf(stderr,
+"DEBUG: inflate()=%d, @ %lu bytes of input, %lu bytes of output\n", zret,
+ctx->zstr.total_in, ctx->zstr.total_out);
+
+		ctx->fail=1;
+
+		return -1;
+	}
+
+	(*pMD5_Update)(&ctx->md5, buf, bufsz);
+	ctx->crc=crc32(ctx->crc, (Bytef *)buf, bufsz);
+
+	return bufsz;
+}
+
+
+static bool unpackchunk_free(struct unpackctx *const ctx, bool discard)
+{
+	char md5out[16];
+
+	if(verbose>=12) fprintf(stderr, "DEBUG: %s called, %sdiscarding\n",
+__func__, discard?"":"not ");
+
+	if(!ctx->valid) {
+		if(!discard&&verbose>=12) fprintf(stderr,
+"unpackchunk_free called on invalid context\n");
+		return false;
+	}
+
+	/* Yuck, but until this point ctx->kdz could be NULL */
+	const struct dz_chunk *const dz=&ctx->kdz->chunks[ctx->chunk].dz;
+
+	ctx->valid=0; /* or about to be invalid */
+
+	if(inflateEnd(&ctx->zstr)!=Z_OK||!ctx->z_finished) {
+		if(!discard) goto fail;
+	} else discard=false; /* if we got to the end, why not try? */
+
+	if(ctx->fail) {
+		if(verbose>=12) fprintf(stderr, "DEBUG: %s context failed\n",
+__func__);
+		goto fail;
+	}
+
+	if(!discard) {
+		if(ctx->crc!=le32toh(dz->crc32)) goto fail;
+
+		(*pMD5_Final)((unsigned char *)md5out, &ctx->md5);
+
+		if(memcmp(md5out, dz->md5, sizeof(md5out))) goto fail;
+	}
+
+	return true;
+
+fail:
+	fprintf(stderr, "Failed while finishing to chunk %d (\"%s\")\n",
+ctx->chunk, dz->slice_name);
+
+	return false;
 }
 

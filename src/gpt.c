@@ -68,6 +68,9 @@ static void gpt_entry_native2raw(struct _gpt_entry *__restrict, const struct gpt
 
 static ssize_t preadfunc(void *opaque, void *buf, size_t count, off64_t offset);
 
+static bool __gptpwrite(int fd, const void *buf, size_t cnt, off64_t off,
+size_t blocksz);
+
 
 
 struct gpt_data *readgpt(int fd, enum gpt_type type)
@@ -216,6 +219,48 @@ uint32_t blocksz)
 }
 
 
+bool writegptboot(int fd, const struct gpt_data *gpt)
+{
+	struct pcslice {
+		uint32_t bootStart;	/* boot flag, plus start in CHS */
+		uint32_t typeEnd;	/* type byte, plus end in CHS */
+		uint32_t startLBA;	/* first LBA */
+		uint32_t sizeLBA;	/* length in blocks */
+	};
+	struct {
+		struct pcslice entr[4];
+		uint16_t magic;
+		uint16_t pad;
+		uint32_t pad2; /* ensure this structure is an expected size */
+	} pcmbr;
+	uint32_t size=~0;
+	uint64_t size64=size;
+
+	if(sizeof(pcmbr)!=72) {
+		/* it didn't get packed right */
+		fprintf(stderr, "%s(): GPT panic, pcmbr improper packing!\n",
+__func__);
+		return false;
+	}
+
+	memset(&pcmbr, 0, sizeof(pcmbr));
+
+	/* boot flag=00, start CHS=00 02 00 */
+	pcmbr.entr[0].bootStart=htobe32(0x00000200);
+	/* protective type=0xEE, ending CHS=FF FF FF */
+	pcmbr.entr[0].typeEnd=htobe32(0xEEFFFFFF);
+	/* GPT grabs LBA 1 */
+	pcmbr.entr[0].startLBA=htole32(1);
+	/* end of media or -1 if media is more than 2^32 -1 blocks */
+	if(size64>gpt->head.altLBA) size=gpt->head.altLBA;
+	pcmbr.entr[0].sizeLBA=size;
+	/* this magic number still survives */
+	pcmbr.magic=htobe16(0x55AA);
+
+	return __gptpwrite(fd, &pcmbr, sizeof(pcmbr)-6, 446, gpt->blocksz);
+}
+
+
 bool writegpt(int fd, const struct gpt_data *gpt)
 {
 	struct _gpt_data *new;
@@ -321,8 +366,6 @@ new->head.myLBA*blocksz)!=blocksz) {
 	return true;
 }
 
-static bool __gptpwrite(int fd, const void *buf, size_t cnt, off64_t off,
-size_t blocksz);
 static bool __writegpt(int fd, struct _gpt_data *new, size_t blocksz)
 {
 	uint32_t crc;

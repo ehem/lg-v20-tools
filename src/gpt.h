@@ -128,6 +128,9 @@ extern bool comparegpt(const struct gpt_data *, const struct gpt_data *);
 /* write the given host format GPT to storage media */
 extern bool writegpt(int fd, const struct gpt_data *gpt);
 
+/* write the boot area */
+extern bool writegptboot(int fd, const struct gpt_data *gpt);
+
 /* WARNING: _writegpt() and __writegpt WILL modify the data */
 /* write the given GPT to storage media, where header is still in host fmt */
 extern bool _writegpt(int fd, struct _gpt_data *gpt);

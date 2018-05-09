@@ -1,5 +1,5 @@
 /* **********************************************************************
-* Copyright (C) 2017 Elliott Mitchell					*
+* Copyright (C) 2017-2018 Elliott Mitchell				*
 *									*
 *	This program is free software: you can redistribute it and/or	*
 *	modify it under the terms of the GNU General Public License as	*
@@ -29,6 +29,8 @@
 #include <sys/stat.h>
 #include <sys/mount.h>
 #include <sys/time.h>
+#include <ctype.h>
+#include <termios.h>
 
 #include <selinux/selinux.h>
 #include <dlfcn.h>
@@ -40,7 +42,7 @@
 int verbose=0;
 
 
-static struct kmod_file *read_kmods(void);
+static struct kmod_file *read_kmods(bool simulate);
 static int write_kmods(struct kmod_file *kmod, bool simulate);
 
 
@@ -50,7 +52,7 @@ int main(int argc, char **argv)
 	struct kmod_file *kmods;
 	int ret=0;
 	int opt;
-	enum {
+	enum mode_enum {
 		TEST	=0x0800,
 		READ	=0x4000,
 		WRITE	=0x8000,
@@ -65,11 +67,12 @@ int main(int argc, char **argv)
 		OP	=SHAR_WRITE|0x10,
 		BOOTLOADER=EXCL_WRITE|0x1,
 		RESTORE	=EXCL_WRITE|0x2,
+		SLICES  =EXCL_WRITE|0x80,
 		MODE_MASK=0x0F,
 	} mode=0;
 	bool savekmods=1;
 
-	while((opt=getopt(argc, argv, "trsmckOabvqMBhH?"))>=0) {
+	while((opt=getopt(argc, argv, "trsmckOSPabvqMBhH?"))>=0) {
 		switch(opt) {
 			int modecnt;
 		case 'r':
@@ -98,6 +101,10 @@ int main(int argc, char **argv)
 			mode|=OP;
 			goto check_mode;
 
+		case 'P':
+			mode|=SLICES;
+			goto check_mode;
+
 		case 'a':
 			mode|=SYSTEM|MODEM|CUST;
 			goto check_mode;
@@ -111,7 +118,14 @@ int main(int argc, char **argv)
 			modecnt=0;
 			if(mode&READ) ++modecnt;
 			if((mode&SHAR_WRITE)==SHAR_WRITE) ++modecnt;
-			if((mode&EXCL_WRITE)==EXCL_WRITE) ++modecnt;
+			if((mode&EXCL_WRITE)==EXCL_WRITE) {
+				enum mode_enum tmp;
+				++modecnt;
+
+				/* multiple exclusive modes is a problem */
+				tmp=mode&~EXCL_WRITE;
+				if(tmp&tmp-1) goto badmode;
+			}
 
 			if(modecnt<=1) break;
 
@@ -143,8 +157,9 @@ int main(int argc, char **argv)
 		ret=1;
 	usage:
 		fprintf(stderr,
-"Copyright (C) 2017 Elliott Mitchell, distributed under GPLv3\n" "\n"
-"Usage: %s [-trsmOabvqB] <KDZ file>\n"
+"Copyright (C) 2017-2018 Elliott Mitchell, distributed under GPLv3\n"
+"Version: $Id$\n" "\n"
+"Usage: %s [-trsmOPabvqB] <KDZ file>\n"
 "  -h  Help, this message\n" "  -v  Verbose, increase verbosity\n"
 "  -q  Quiet, decrease verbosity\n"
 "  -t  Test, does the KDZ file appear applicable, simulates writing\n"
@@ -154,11 +169,12 @@ int main(int argc, char **argv)
 "  -M  Do NOT attempt to preserve old kernel modules\n"
 "  -m  Modem, write modem area from KDZ\n"
 "  -c  Cust, write area appearing to effect VoLTE from KDZ\n"
+"  -P  Restore GPTs which were modified by non-stock Android installation\n"
 "  -O  OP, write OP area from KDZ\n"
 "  -k  Kernel, write kernel/boot area from KDZ; need to restore system at\n"
 "      same time, or else be prepared to install new kernel immediately!\n"
 "  -b  Bootloader, write bootloader from KDZ; USED FOR RETURNING TO STOCK!\n"
-"Only one of -t, -r, -a, or -b is allowed.  -s, -m, -k, and -O may be used \n"
+"Only one of -P, -b, or -r is allowed.  -a, -s, -m, -k, and -O may be used\n"
 "together, but they exclude the prior options.\n", argv[0]);
 		return ret;
 	}
@@ -175,14 +191,53 @@ int main(int argc, char **argv)
 	/* one final warning before doing the deed */
 	if(mode&WRITE&&!(mode&TEST)) {
 		int count=10;
-		printf("Preparing active write operation, are you sure?\n");
+
+		puts((mode&SLICES)==SLICES?
+"All GPTs are about to be replaced.  Unless the existing userdata area is in\n"
+"EXACTLY the same position as the new userdata area, you WILL NEED TO WIPE!\n"
+"\n" "Are you sure? (y/N)\n":
+"About to start an active write operation, there is some risk involved.\n"
+"\n" "Are you sure? (y/N)\n");
+		{
+			char buf;
+			tcflag_t lflag;
+			cc_t save0, save1;
+			struct termios termios;
+			tcgetattr(0, &termios);
+			lflag=termios.c_lflag;
+			save0=termios.c_cc[VMIN];
+			save1=termios.c_cc[VTIME];
+			termios.c_lflag&=~ICANON;
+			termios.c_cc[VMIN]=1;
+			termios.c_cc[VTIME]=0;
+			tcsetattr(fileno(stdin), TCSANOW, &termios);
+			buf=getchar();
+			puts("\n\n");
+			termios.c_lflag=lflag;
+			termios.c_cc[VMIN]=save0;
+			termios.c_cc[VTIME]=save1;
+			tcsetattr(fileno(stdin), TCSANOW, &termios);
+			if(tolower(buf)!='y') {
+				fprintf(stderr,
+"No user confirmation, aborting.\n");
+				ret=64;
+				goto abort;
+			}
+		}
+
+		printf(
+"Preparing active write operation, hit control-C to abort...\n");
 
 		do {
 			printf("%d seconds %c", count, count?'\r':'\n');
 			fflush(stdout);
 			sleep(1);
 		} while(count--);
+
+		puts("\n\n");
 	}
+
+	if(verbose>=10) fprintf(stderr, "DEBUG: Entering action switch\n");
 
 	switch(mode) {
 	case REPORT:
@@ -228,6 +283,29 @@ int main(int argc, char **argv)
 		}
 		printf("Write bootloader (to be implemented)\n");
 		break;
+	case SLICES:
+	case SLICES|TEST:
+		if(test_kdzfile(kdz)<2) {
+			fprintf(stderr,
+"%s: This KDZ file is an insufficiently good match for this device,\n"
+"abandoning operation!\n", argv[0]);
+			ret=8;
+			goto abort;
+		}
+
+		printf("Begining replacement of GPTs%s\n",
+mode&TEST?" (simulated)":"");
+
+		if(!fix_gpts(kdz, mode&TEST?1:0)) {
+			fprintf(stderr,
+"%s: Failed while restoring GPTs, task failed, but DON'T PANIC.\n",
+argv[0]);
+			ret=1;
+
+			goto abort;
+		}
+
+		break;
 	default:
 		if((mode&WRITE)==WRITE) {
 			if(test_kdzfile(kdz)<=0) {
@@ -238,10 +316,10 @@ int main(int argc, char **argv)
 				goto abort;
 			}
 
-			if((mode&SYSTEM)==SYSTEM) {
+			if(mode&SYSTEM&~SHAR_WRITE) {
 				printf("Begining rewrite of system area%s\n",
 mode&TEST?" (simulated)":"");
-				if(savekmods&&!(kmods=read_kmods())) {
+				if(savekmods&&!(kmods=read_kmods(mode&TEST?1:0))) {
 					fprintf(stderr,
 "%s: Failed while reading kernel modules\n", argv[0]);
 					ret=64;
@@ -261,24 +339,24 @@ argv[0]);
 				printf("Finished rewrite of system area%s\n",
 mode&TEST?" (simulated)":"");
 			}
-			if((mode&MODEM)==MODEM) {
+			if(mode&MODEM&~SHAR_WRITE) {
 				printf("Begining rewrite of modem area%s\n",
 mode&TEST?" (simulated)":"");
 				write_kdzfile(kdz, "modem", mode&TEST?1:0);
 				printf("Finished rewrite of modem area%s\n",
 mode&TEST?" (simulated)":"");
 			}
-			if((mode&CUST)==CUST) {
+			if(mode&CUST&~SHAR_WRITE) {
 				printf("Begining rewrite of cust area%s\n",
 mode&TEST?" (simulated)":"");
 				write_kdzfile(kdz, "cust", mode&TEST?1:0);
 				printf("Finished rewrite of cust area%s\n",
 mode&TEST?" (simulated)":"");
 			}
-			if((mode&OP)==OP) {
+			if(mode&OP&~SHAR_WRITE) {
 				printf("Write OP (to be implemented)\n");
 			}
-			if((mode&KERNEL)==KERNEL) {
+			if(mode&KERNEL&~SHAR_WRITE) {
 				printf("Begining reinstall of stock kernel/boot%s\n", mode&TEST?" (simulated)":"");
 				write_kdzfile(kdz, "boot", mode&TEST?1:0);
 				printf("Finished reinstall of boot area%s\n",
@@ -299,12 +377,19 @@ abort:
 }
 
 
+#ifndef BUILDTIME_LINK_LIBS
 /* wrap the libselinux symbols we need */
 static void *libselinux=NULL;
 
-__typeof__(fgetfilecon) *p_fgetfilecon=NULL;
-__typeof__(fsetfilecon) *p_fsetfilecon=NULL;
-__typeof__(freecon) *p_freecon=NULL;
+#define WRAPSYM(sym) __typeof__(sym) *p_##sym=NULL
+#else
+#define WRAPSYM(sym) __typeof__(sym) *const p_##sym=(sym)
+#endif
+
+WRAPSYM(fgetfilecon);
+WRAPSYM(fsetfilecon);
+WRAPSYM(freecon);
+#undef WRAPSYM
 #define fgetfilecon (*p_fgetfilecon)
 #define fsetfilecon (*p_fsetfilecon)
 #define freecon (*p_freecon)
@@ -312,6 +397,7 @@ __typeof__(freecon) *p_freecon=NULL;
 
 void libselinux_start(void)
 {
+#ifndef BUILDTIME_LINK_LIBS
 	int i;
 	struct {
 		void **psym;
@@ -337,16 +423,19 @@ syms[i].name, dlerror());
 			exit(-1);
 		}
 	}
+#endif
 }
 
 void libselinux_stop(void)
 {
+#ifndef BUILDTIME_LINK_LIBS
 	if(!libselinux) return;
 
 	dlclose(libselinux);
 	p_fgetfilecon=NULL;
 	p_fsetfilecon=NULL;
 	p_freecon=NULL;
+#endif
 }
 
 
@@ -359,24 +448,28 @@ struct kmod_file {
 	char name[];		/* filename */
 };
 
-static struct kmod_file *read_kmods(void)
+static struct kmod_file *read_kmods(bool simulate)
 {
 	struct kmod_file *ret=NULL, **pcur=&ret;
 	DIR *dir=NULL;
 	struct dirent64 *entry;
 	int fd=-1;
+	bool mounted=false;
 
 	libselinux_start();
 
 	/* hopefully not mounted, but make sure */
-	umount2("/system", MNT_DETACH);
+	if(!simulate) umount2("/system", MNT_DETACH);
 
 	if(mount("/dev/block/bootdevice/by-name/system", "/system",
 "ext4", MS_RDONLY, "discard")) {
-		fprintf(stderr, "Failed mounting system for kmod saving: %s\n",
+		if(!simulate||errno!=EBUSY) {
+			fprintf(stderr, "Failed mounting system for kmod saving: %s\n",
 strerror(errno));
-		goto abort;
-	}
+			goto abort;
+		}
+		mounted=false;
+	} else mounted=true;
 
 	if(!(dir=opendir("/system/lib/modules"))) {
 		fprintf(stderr, "Error while opening module directory: %s\n",
@@ -462,7 +555,7 @@ entry->d_name, strerror(errno));
 	chdir("/");
 
 	/* failure here is problematic since we would be writing a mounted FS */
-	if(umount("/system")) {
+	if(mounted&&umount("/system")) {
 		fprintf(stderr, "Failed during unmount of /system: %s\n",
 strerror(errno));
 		goto abort;
@@ -487,7 +580,7 @@ abort:
 	chdir("/");
 
 	/* either this suceeds, or dunno */
-	umount("/system");
+	if(mounted) umount("/system");
 
 	return NULL;
 }
