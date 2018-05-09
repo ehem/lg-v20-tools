@@ -33,6 +33,9 @@
 #include <getopt.h>
 #include <stdio.h>
 
+#include <selinux/selinux.h>
+#include <dlfcn.h>
+
 #include "gpt.h"
 
 
@@ -43,8 +46,26 @@
 #endif
 
 
+static void libselinux_start(void);
+static void libselinux_stop(void);
 static int check_intervene(const char *const argv0, const struct gpt_data *gpt,
 uint64_t lo, uint64_t hi, int skip0, int skip1);
+
+
+#ifndef BUILDTIME_LINK_LIBS
+/* wrap the libselinux symbols we need */
+static void *libselinux=NULL;
+
+#define WRAPSYM(sym) __typeof__(sym) *p_##sym=NULL
+
+WRAPSYM(fgetfilecon);
+WRAPSYM(fsetfilecon);
+WRAPSYM(freecon);
+#undef WRAPSYM
+#define fgetfilecon (*p_fgetfilecon)
+#define fsetfilecon (*p_fsetfilecon)
+#define freecon (*p_freecon)
+#endif
 
 
 int verbose=0;
@@ -60,6 +81,7 @@ int main(int argc, char **argv)
 	int OP, data, i;
 	const char *actstr;
 	char *buf=NULL;
+	char *secon=NULL;
 
 	enum {
 		UNSPEC=0,
@@ -133,6 +155,8 @@ int main(int argc, char **argv)
 
 		return ret;
 	}
+
+	libselinux_start();
 
 
 	/* get the device */
@@ -341,6 +365,14 @@ O_RDONLY))<0) {
 			goto abort;
 		}
 
+		if(fgetfilecon(fd, &secon)<0) {
+			fprintf(stderr,
+"%s: Unable to get SE Linux context for official_op_resize.cfg: %s\n", argv[0],
+strerror(errno));
+			goto abort;
+		}
+
+
 		if((bufcnt=lseek(fd, 0, SEEK_END))<0) {
 			fprintf(stderr,
 "%s: Failed to get size of official_op_resize.cfg: %s\n", argv[0],
@@ -369,23 +401,25 @@ strerror(errno));
 		close(fd);
 		fd=-1;
 
-		for(i=0, cur=0; i<bufcnt; ++i, ++cur) {
-			if(buf[i]=='=') {
-				if(cur!=i) buf[cur]=buf[i];
+		/* this loop could overflow, but not beyond bufcnt+1 */
+		buf[bufcnt]='\0';
 
+		for(i=0, cur=0; i<bufcnt; ++i, ++cur) {
+			buf[cur]=buf[i];
+
+			if(buf[i]=='=') {
 				while(isdigit(buf[++i])) ;
 				buf[++cur]='0'; /* buf has an extra */
 
 				/* line with no number???  overflow time! */
-				if(cur>=i) {
+				if(cur>--i) {
 					fprintf(stderr,
 "%s: official_op_resize.cfg line did not include size, unable to handle!\n",
 argv[0]);
 					ret=128;
 					goto abort;
 				}
-
-			} else if(cur!=i) buf[cur]=buf[i];
+			}
 		}
 
 #ifndef DEBUG
@@ -404,38 +438,61 @@ MS_REMOUNT|MS_NOATIME, "discard")) {
 				goto abort;
 			}
 
-			if((fd=open(CUST"/official_op_resize.cfg",
-#if defined(DISABLE_WRITES)||defined(DEBUG)
-O_CREAT|
-#endif
-O_RDWR|O_LARGEFILE, 0644))<0) {
+			if((fd=creat(CUST"/official_op_resize.cfg.rmOP",
+0644))<0) {
 				fprintf(stderr,
 "%s: Unable to open official_op_resize.cfg RW: %s\n", argv[0], strerror(errno));
 				ret=1;
 				goto abort;
 			}
 
-#ifndef DISABLE_WRITES
-			/* We're shrinking the file, very unlikely to fail. */
+			if(fsetfilecon(fd, secon)<0) {
+				fprintf(stderr,
+"%s: Unable to set SE Linux context for official_op_resize.cfg.rmOP: %s\n",
+argv[0], strerror(errno));
+				ret=1;
+				goto abort;
+			}
+
+			freecon(secon);
+			secon=NULL;
+
 			if(write(fd, buf, cur)!=cur) {
 				fprintf(stderr,
-"%s: Failed while writing official_op_resize.cfg: %s, PANIC!\n", argv[0],
+"%s: Failed while writing official_op_resize.cfg: %s\n", argv[0],
 strerror(errno));
 				ret=1;
 				goto abort;
 			}
 
-			/* *Should* be smaller, so very unlikely to fail. */
-			if(ftruncate(fd, cur)) {
+			if(close(fd)<0) {
 				fprintf(stderr,
-"%s: Truncation of official_op_resize.cfg: %s\n", argv[0], strerror(errno));
+"%s: Failure during close() of official_op_resize.cfg.rmOP: %s\n", argv[0],
+strerror(errno));
+				ret=1;
+				goto abort;
+			}
+			fd=-1;
+
+#if !defined(DISABLE_WRITES)&&!defined(DEBUG)
+			if(rename("/cust/official_op_resize.cfg",
+"/cust/official_op_resize.cfg.orig")<0) {
+				fprintf(stderr,
+"%s: Failed to rename old official_op_resize.cfg: %s\n", argv[0],
+strerror(errno));
 				ret=1;
 				goto abort;
 			}
 #endif
 
-			close(fd);
-			fd=-1;
+			if(link(CUST"/official_op_resize.cfg.rmOP",
+CUST"/official_op_resize.cfg")<0) {
+				fprintf(stderr,
+"%s: Failed to link() new official_op_resize.cfg: %s\n", argv[0],
+strerror(errno));
+				ret=1;
+				goto abort;
+			}
 		}
 
 		umount("/cust");
@@ -479,6 +536,10 @@ abort:
 
 	if(dev>=0) close(dev);
 
+	if(secon) freecon(secon);
+
+	libselinux_stop();
+
 	return ret;
 }
 
@@ -499,5 +560,49 @@ uint64_t lo, uint64_t hi, int skip0, int skip1)
 	}
 
 	return 0;
+}
+
+
+void libselinux_start(void)
+{
+#ifndef BUILDTIME_LINK_LIBS
+	int i;
+	struct {
+		void **psym;
+		const char name[16];
+	} syms[]={
+		{(void **)&p_fgetfilecon, "fgetfilecon"},
+		{(void **)&p_fsetfilecon, "fsetfilecon"},
+		{(void **)&p_freecon, "freecon"},
+	};
+
+	if(libselinux) return;
+
+	if(!(libselinux=dlopen("libselinux.so", RTLD_GLOBAL))) {
+		fprintf(stderr, "Failed to dlopen() libselinux.so: %s\n",
+dlerror());
+		exit(-1);
+	}
+
+	for(i=0; i<sizeof(syms)/sizeof(syms[0]); ++i) {
+		if(!(*(syms[i].psym)=dlsym(libselinux, syms[i].name))) {
+			fprintf(stderr, "Failed to resolve \"%s\": %s\n",
+syms[i].name, dlerror());
+			exit(-1);
+		}
+	}
+#endif
+}
+
+void libselinux_stop(void)
+{
+#ifndef BUILDTIME_LINK_LIBS
+	if(!libselinux) return;
+
+	dlclose(libselinux);
+	p_fgetfilecon=NULL;
+	p_fsetfilecon=NULL;
+	p_freecon=NULL;
+#endif
 }
 
