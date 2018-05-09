@@ -889,11 +889,13 @@ gptkdz->entry[end].endLBA);
 
 		if(!simulate) {
 			/* failure indicates kernel may be using old table */
+#ifndef DEBUG
 			if(ioctl(dev, BLKRRPART, NULL)) {
 				if(verbose>=7) fprintf(stderr,
 "ioctl(BLKRRPART) failed, kernel still uses old GPT\n");
 				ret=false;
 			}
+#endif
 		}
 	}
 
@@ -1094,6 +1096,12 @@ static int open_device(const struct kdz_file *kdz, int dev, int flags)
 	char name[32];
 	const char *fmt;
 	char unit;
+#ifdef DEBUG
+	if((flags&O_RDWR)==O_RDWR||(flags&O_WRONLY)==O_WRONLY) {
+		fmt="/sd%c";
+		unit='a';
+	} else
+#endif
 	if((kdz->dz_file.flag_ufs&256)==256) {
 		fmt="/dev/block/sd%c";
 		unit='a';
