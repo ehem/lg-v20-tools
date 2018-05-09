@@ -192,10 +192,12 @@ int main(int argc, char **argv)
 	if(mode&WRITE&&!(mode&TEST)) {
 		int count=10;
 
-		printf(
+		puts((mode&SLICES)==SLICES?
+"All GPTs are about to be replaced.  Unless the existing userdata area is in\n"
+"EXACTLY the same position as the new userdata area, you WILL NEED TO WIPE!\n"
+"\n" "Are you sure? (y/N)\n":
 "About to start an active write operation, there is some risk involved.\n"
-"Are you sure? (y/N)\n");
-
+"\n" "Are you sure? (y/N)\n");
 		{
 			char buf;
 			tcflag_t lflag;
