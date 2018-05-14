@@ -168,10 +168,15 @@ argv[0]);
 	}
 	len=readlink("/dev/block/bootdevice/by-name/OP", devname, PATH_MAX+1);
 	if(len<=0) {
-		fprintf(stderr, "%s: Could not find /OP's device, "
+		len=readlink("/dev/block/bootdevice/by-name/XOPX", devname,
+PATH_MAX+1);
+
+		if(len<=0) {
+			fprintf(stderr, "%s: Could not find /OP's device, "
 "unable to continue\n", argv[0]);
-		ret=1;
-		goto abort;
+			ret=1;
+			goto abort;
+		}
 	}
 
 	while(isdigit(devname[--len]));
