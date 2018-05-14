@@ -16,6 +16,7 @@ include $(CLEAR_VARS)
 LOCAL_MODULE := syncfile
 LOCAL_SRC_FILES := syncfile.c
 LOCAL_CFLAGS := -Wall
+LOCAL_LDFLAGS := -Wl,-dynamic-linker,/sbin/linker64
 include $(BUILD_EXECUTABLE)
 
 
