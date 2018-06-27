@@ -699,6 +699,8 @@ abort:
 }
 
 
+static long long get_OP_size(void);
+
 bool fix_gpts(const struct kdz_file *kdz, const bool simulate)
 {
 	int i, j;
@@ -707,66 +709,12 @@ bool fix_gpts(const struct kdz_file *kdz, const bool simulate)
 	size_t bufsz=4096;
 	char *buf=NULL;
 	struct gpt_data *gptkdz=NULL;
-	int fd;
-	unsigned long long opsz;
+	long long opsz;
 	bool ret=true;
 
+	if((opsz=get_OP_size())<0) return false;
+
 	if(!(buf=malloc(bufsz))) return false;
-
-	if(access("/dev/block/bootdevice/by-name/cust", F_OK)<0) {
-		fprintf(stderr,
-"Cannot access /dev/block/bootdevice/by-name, assuming OP size of 0.\n");
-		opsz=0;
-	} else {
-		if(mkdir("/cust", 0777)<0) {
-			struct stat buf;
-			if(errno!=EEXIST) {
-				fprintf(stderr,
-"Failed to create /cust mount point: %s\n", strerror(errno));
-				goto abort;
-			}
-			if(stat("/cust", &buf)<0||!S_ISDIR(buf.st_mode)) {
-				fprintf(stderr,
-"Failed when creating /cust mount point, unable to continue\n");
-				goto abort;
-			}
-			/* this could mean we were run recently... */
-			umount("/cust");
-		}
-
-		if(mount("/dev/block/bootdevice/by-name/cust", "/cust",
-"ext4", MS_RDONLY, "discard")) {
-			fprintf(stderr,
-"Failed OP resize data retrieval: %s\n", strerror(errno));
-			goto abort;
-		}
-
-		if((fd=open("/cust/official_op_resize.cfg",
-O_RDONLY|MS_NOATIME))<0) {
-			fprintf(stderr,
-"Unable to open official_op_resize.cfg: %s\n", strerror(errno));
-			umount("/cust");
-			goto abort;
-		}
-
-		if(read(fd, buf, bufsz)<0) {
-			fprintf(stderr,
-"Failed during read of official_op_resize.cfg: %s\n", strerror(errno));
-			opsz=0;
-		} else {
-			buf[bufsz-1]='\0';
-
-			i=strchr(buf, '=')-buf+1;
-
-			opsz=strtoull(buf+i, NULL, 0);
-		}
-
-		if(verbose>=1) fprintf(stderr,
-"official_op_resize.cfg makes /OP %llu bytes\n", opsz);
-
-		close(fd);
-		umount("/cust");
-	}
 
 
 	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
@@ -911,6 +859,79 @@ abort:
 	unpackchunk_free(ctx, true);
 
 	return false;
+}
+
+
+static long long get_OP_size(void)
+{
+	int i;
+	size_t bufsz=4096;
+	char *buf=NULL;
+	int fd;
+	unsigned long long opsz=-1;
+
+	if(access("/dev/block/bootdevice/by-name/cust", F_OK)<0) {
+		fprintf(stderr,
+"Cannot access /dev/block/bootdevice/by-name/cust, assuming OP size of 0.\n");
+		return 0;
+	}
+
+	if(mkdir("/cust", 0777)<0) {
+		struct stat buf;
+		if(errno!=EEXIST) {
+			fprintf(stderr,
+"Failed to create /cust mount point: %s\n", strerror(errno));
+			goto end;
+		}
+		if(stat("/cust", &buf)<0||!S_ISDIR(buf.st_mode)) {
+			fprintf(stderr,
+"Failed when creating /cust mount point, unable to continue\n");
+			goto end;
+		}
+		/* this could mean we were run recently... */
+		umount("/cust");
+	}
+
+	if(mount("/dev/block/bootdevice/by-name/cust", "/cust",
+"ext4", MS_RDONLY, "discard")) {
+		fprintf(stderr,
+"Failed OP resize data retrieval: %s\n", strerror(errno));
+		goto end;
+	}
+
+	if((fd=open("/cust/official_op_resize.cfg",
+O_RDONLY|MS_NOATIME))<0) {
+		fprintf(stderr,
+"Unable to open official_op_resize.cfg: %s\n", strerror(errno));
+		umount("/cust");
+		goto end;
+	}
+
+	if(!(buf=malloc(bufsz))) goto end;
+
+	if(read(fd, buf, bufsz)<0) {
+		fprintf(stderr,
+"Failed during read of official_op_resize.cfg: %s\n", strerror(errno));
+		opsz=0;
+	} else {
+		buf[bufsz-1]='\0';
+
+		i=strchr(buf, '=')-buf+1;
+
+		opsz=strtoull(buf+i, NULL, 0);
+	}
+
+	if(verbose>=1) fprintf(stderr,
+"official_op_resize.cfg makes /OP %lld bytes\n", opsz);
+
+	close(fd);
+	umount("/cust");
+
+
+end:
+	if(buf) free(buf);
+
+	return opsz;
 }
 
 
