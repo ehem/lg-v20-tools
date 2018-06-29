@@ -72,7 +72,7 @@ int main(int argc, char **argv)
 	} mode=0;
 	bool savekmods=1;
 
-	while((opt=getopt(argc, argv, "trsmckOSPabvqMBhH?"))>=0) {
+	while((opt=getopt(argc, argv, "?aBbcHhkMmOPqrSstv"))>=0) {
 		switch(opt) {
 			int modecnt;
 		case 'r':
@@ -159,7 +159,7 @@ int main(int argc, char **argv)
 		fprintf(stderr,
 "Copyright (C) 2017-2018 Elliott Mitchell, distributed under GPLv3\n"
 "Version: $Id$\n" "\n"
-"Usage: %s [-trsmOPabvqB] <KDZ file>\n"
+"Usage: %s [-aBbchkMmOPqrSstv] <KDZ file>\n"
 "  -h  Help, this message\n" "  -v  Verbose, increase verbosity\n"
 "  -q  Quiet, decrease verbosity\n"
 "  -t  Test, does the KDZ file appear applicable, simulates writing\n"
@@ -170,7 +170,9 @@ int main(int argc, char **argv)
 "  -m  Modem, write modem area from KDZ\n"
 "  -c  Cust, write area appearing to effect VoLTE from KDZ\n"
 "  -P  Restore GPTs which were modified by non-stock Android installation\n"
+#if 0
 "  -O  OP, write OP area from KDZ\n"
+#endif
 "  -k  Kernel, write kernel/boot area from KDZ; need to restore system at\n"
 "      same time, or else be prepared to install new kernel immediately!\n"
 "  -b  Bootloader, write bootloader from KDZ; USED FOR RETURNING TO STOCK!\n"
