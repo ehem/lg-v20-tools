@@ -701,7 +701,8 @@ abort:
 
 static long long get_OP_size(void);
 
-bool fix_gpts(const struct kdz_file *kdz, const bool simulate)
+bool fix_gpts(const struct kdz_file *kdz, const bool alt_order,
+const bool simulate)
 {
 	int i, j;
 	int dev=-1;

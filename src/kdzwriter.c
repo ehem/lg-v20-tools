@@ -67,12 +67,13 @@ int main(int argc, char **argv)
 		OP	=SHAR_WRITE|0x10,
 		BOOTLOADER=EXCL_WRITE|0x1,
 		RESTORE	=EXCL_WRITE|0x2,
+		SLICES_ALT=EXCL_WRITE|0x40,
 		SLICES  =EXCL_WRITE|0x80,
 		MODE_MASK=0x0F,
 	} mode=0;
 	bool savekmods=1;
 
-	while((opt=getopt(argc, argv, "?aBbcHhkMmOPqrSstv"))>=0) {
+	while((opt=getopt(argc, argv, "?aBbcHhkMmOPqRrSstv"))>=0) {
 		switch(opt) {
 			int modecnt;
 		case 'r':
@@ -104,6 +105,9 @@ int main(int argc, char **argv)
 		case 'P':
 			mode|=SLICES;
 			goto check_mode;
+		case 'R':
+			mode|=SLICES_ALT;
+			goto check_mode;
 
 		case 'a':
 			mode|=SYSTEM|MODEM|CUST;
@@ -124,7 +128,7 @@ int main(int argc, char **argv)
 
 				/* multiple exclusive modes is a problem */
 				tmp=mode&~EXCL_WRITE;
-				if(tmp&tmp-1) goto badmode;
+				if(tmp&tmp-1) ++modecnt;
 			}
 
 			if(modecnt<=1) break;
@@ -159,7 +163,7 @@ int main(int argc, char **argv)
 		fprintf(stderr,
 "Copyright (C) 2017-2018 Elliott Mitchell, distributed under GPLv3\n"
 "Version: $Id$\n" "\n"
-"Usage: %s [-aBbchkMmOPqrSstv] <KDZ file>\n"
+"Usage: %s [-aBbchkMmOPqRrSstv] <KDZ file>\n"
 "  -h  Help, this message\n" "  -v  Verbose, increase verbosity\n"
 "  -q  Quiet, decrease verbosity\n"
 "  -t  Test, does the KDZ file appear applicable, simulates writing\n"
@@ -170,6 +174,7 @@ int main(int argc, char **argv)
 "  -m  Modem, write modem area from KDZ\n"
 "  -c  Cust, write area appearing to effect VoLTE from KDZ\n"
 "  -P  Restore GPTs which were modified by non-stock Android installation\n"
+"  -R  Restore GPTs modified by non-stock Android, but in alternate order\n"
 #if 0
 "  -O  OP, write OP area from KDZ\n"
 #endif
@@ -194,7 +199,7 @@ int main(int argc, char **argv)
 	if(mode&WRITE&&!(mode&TEST)) {
 		int count=10;
 
-		puts((mode&SLICES)==SLICES?
+		puts((mode&SLICES)==SLICES||(mode&SLICES_ALT)==SLICES_ALT?
 "All GPTs are about to be replaced.  Unless the existing userdata area is in\n"
 "EXACTLY the same position as the new userdata area, you WILL NEED TO WIPE!\n"
 "\n" "Are you sure? (y/N)\n":
@@ -287,6 +292,8 @@ int main(int argc, char **argv)
 		break;
 	case SLICES:
 	case SLICES|TEST:
+	case SLICES_ALT:
+	case SLICES_ALT|TEST:
 		if(test_kdzfile(kdz)<2) {
 			fprintf(stderr,
 "%s: This KDZ file is an insufficiently good match for this device,\n"
@@ -298,7 +305,7 @@ int main(int argc, char **argv)
 		printf("Begining replacement of GPTs%s\n",
 mode&TEST?" (simulated)":"");
 
-		if(!fix_gpts(kdz, mode&TEST?1:0)) {
+		if(!fix_gpts(kdz, (mode&SLICES_ALT)==SLICES_ALT, mode&TEST?1:0)) {
 			fprintf(stderr,
 "%s: Failed while restoring GPTs, task failed, but DON'T PANIC.\n",
 argv[0]);
