@@ -704,6 +704,36 @@ abort:
 }
 
 
+static bool fix_gpt_persistent(struct gpt_data *dst,
+struct gpt_buf *const gptdev, unsigned short target, unsigned short index,
+const uint32_t blksz);
+static bool add_fix_gpt_entry(struct gpt_data *dst,
+struct gpt_buf *const unused0, unsigned short target, unsigned short index,
+const uint32_t unused1);
+
+
+static const struct {
+	const char *const name;
+	bool (*func)(struct gpt_data *gptkdz, struct gpt_buf *const gptdevbuf,
+unsigned short target, unsigned short index, const uint32_t blksz);
+	unsigned order; /* where we want to put it, 0==NOP */
+} gpt_targets[]={
+	{ "OP",		add_fix_gpt_entry,	2 },
+	{ "cache",	add_fix_gpt_entry,	5 },
+	{ "cust",	add_fix_gpt_entry,	3 },
+	{ "persistent",	fix_gpt_persistent,	0 },
+	{ "system",	add_fix_gpt_entry,	4 },
+	{ "userdata",	add_fix_gpt_entry,	1 },
+};
+
+static int gpt_index[sizeof(gpt_targets)/sizeof(gpt_targets[0])];
+
+static int finish_gpt_normal(struct gpt_data *gpt);
+
+static int finish_gpt_reverse(struct gpt_data *gpt);
+
+static int get_target(const char *const key);
+
 static long long get_OP_size(void);
 
 bool fix_gpts(const struct kdz_file *kdz, const bool alt_order,
@@ -728,9 +758,13 @@ const bool simulate)
 		uint32_t blksz;
 		struct gpt_buf gpt_buf;
 
+		unsigned touched=0; /* flag modified GPTs */
+
 		if(strcmp(dz->slice_name, "PrimaryGPT")) continue;
 
 		if((dev=open_device(kdz, dz->device, O_RDWR))<0) goto abort;
+
+		memset(gpt_index, -1, sizeof(gpt_index));
 
 		blksz=kdz->devs[dz->device].blksz;
 
@@ -759,73 +793,23 @@ const bool simulate)
 			goto abort;
 		}
 
+		gpt_buf.bufsz=kdz->devs[dz->device].len;
+		gpt_buf.buf=kdz->devs[dz->device].map;
+
+
+		/* Search phase */
 
 		for(j=0; j<gptkdz->head.entryCount; ++j) {
-			int64_t delta;
-			uint32_t start, end;
-			struct gpt_entry *const kdzentr=gptkdz->entry+j;
+			int mat;
 
-			if(!strcmp("persistent", kdzentr->name)) {
-				struct gpt_data *gptdev=NULL;
-
-				gpt_buf.bufsz=kdz->devs[dz->device].len;
-				gpt_buf.buf=kdz->devs[dz->device].map;
-				gptdev=readgptb(gptbuffunc, &gpt_buf, blksz,
-GPT_ANY);
-
-				if(gptdev&&!uuid_is_null(gptdev->entry[j].id))
-					uuid_copy(kdzentr->id, gptdev->entry[j].id);
-
-				else {
-					int urandom;
-					urandom=open("/dev/urandom", O_RDONLY);
-
-					/* I'm guessing this is appropriate */
-					/* if this fails, well can't do much */
-					if(urandom>=0) {
-						read(urandom, &kdzentr->id, sizeof(kdzentr->id));
-						close(urandom);
-					}
-				}
-
-				if(gptdev) free(gptdev);
-			}
-
-			if(strcmp("OP", kdzentr->name)) continue;
-
-			/* convert to block count */
-			delta=opsz/blksz;
-
-			/* oddly OP in KDZ files is non-zero size */
-			delta-=(kdzentr->endLBA-kdzentr->startLBA+1);
-
-			start=end=j;
-			if(!strcmp("userdata", gptkdz->entry[j-1].name)) {
-				if(verbose>=7) fprintf(stderr,
-"DEBUG: userdata before OP, userdata end=%lu, OP begin=%lu\n",
-gptkdz->entry[j-1].endLBA, kdzentr->startLBA);
-				if(gptkdz->entry[j-1].endLBA+1!=kdzentr->startLBA) continue;
-				--end;
-				delta=-delta;
-			} else if(!strcmp("userdata", gptkdz->entry[j+1].name)) {
-				if(verbose>=7) fprintf(stderr,
-"DEBUG: OP before userdata, userdata begin=%lu, OP end=%lu\n",
-gptkdz->entry[j+1].startLBA, kdzentr->endLBA);
-				if(gptkdz->entry[j+1].startLBA!=kdzentr->endLBA+1) continue;
-				++start;
-			} else continue;
-			if(verbose>=4) fprintf(stderr,
-"DEBUG: OP: start idx %u end idx %u, delta=%+ld\n", start, end, delta);
-			gptkdz->entry[start].startLBA+=delta;
-			gptkdz->entry[end].endLBA+=delta;
-			if(verbose>=4) fprintf(stderr,
-"DEBUG: OP: new start %lu, new end %lu\n", gptkdz->entry[start].startLBA,
-gptkdz->entry[end].endLBA);
-
-			/* Yes, they ARE this perverse; adjust userdata first */
-			if(opsz<=0)
-				memset(kdzentr, 0, sizeof(struct gpt_entry));
+			if((mat=get_target(gptkdz->entry[j].name))>=0)
+				if(gpt_targets[mat].func(gptkdz, &gpt_buf, mat,
+j, blksz)) touched=1;
 		}
+
+		if(touched&&
+!(alt_order?finish_gpt_reverse:finish_gpt_normal)(gptkdz))
+			return false;
 
 		if(!simulate) {
 			if(!writegpt(dev, gptkdz)) {
@@ -865,6 +849,234 @@ abort:
 	unpackchunk_free(ctx, true);
 
 	return false;
+}
+
+static bool fix_gpt_persistent(struct gpt_data *gptkdz,
+struct gpt_buf *const gptdevbuf, unsigned short target, unsigned short index,
+const uint32_t blksz)
+{
+	struct gpt_data *gptdev=NULL;
+	struct gpt_entry *const kdzentr=gptkdz->entry+index;
+
+	gptdev=readgptb(gptbuffunc, gptdevbuf, blksz, GPT_ANY);
+
+	if(gptdev&&!uuid_is_null(gptdev->entry[index].id))
+		uuid_copy(kdzentr->id, gptdev->entry[index].id);
+
+	else {
+		int urandom;
+		urandom=open("/dev/urandom", O_RDONLY);
+
+		/* I'm guessing this is appropriate */
+		/* if this fails, well can't do much */
+		if(urandom>=0) {
+			read(urandom, &kdzentr->id, sizeof(kdzentr->id));
+			close(urandom);
+		}
+	}
+
+	if(gptdev) free(gptdev);
+
+	return false;
+}
+
+
+static int finish_gpt_normal(struct gpt_data *gpt)
+{
+	int64_t delta;
+	long long opsz;
+
+	struct gpt_entry *opentr, *datentr, *startentr, *endentr;
+
+	int i;
+
+
+	i=get_target("OP");
+	if(verbose>=7) fprintf(stderr, "DEBUG: OP: target=%d ", i);
+	if((i=gpt_index[i])<0) return true;
+	if(verbose>=7) fprintf(stderr, "index=%d name=\"%s\"\n", i,
+gpt->entry[i].name);
+	opentr=gpt->entry+i;
+
+	i=get_target("userdata");
+	if(verbose>=7) fprintf(stderr, "DEBUG: userdata: target=%d ", i);
+	if((i=gpt_index[i])<0) {
+		fprintf(stderr, "Error: userdata and OP on different major "
+"devices, cannot compensate!\n");
+		return true;
+	}
+	if(verbose>=7) fprintf(stderr, "index=%d name=\"%s\"\n", i,
+gpt->entry[i].name);
+	datentr=gpt->entry+i;
+
+
+
+
+	if((opsz=get_OP_size())<0) return false;
+
+	/* convert to block count */
+	delta=opsz/gpt->blocksz;
+
+	/* oddly OP in KDZ files is non-zero size */
+	delta-=(opentr->endLBA-opentr->startLBA+1);
+
+
+	if(datentr->startLBA<opentr->startLBA) {
+		if(verbose>=7) fprintf(stderr,
+"DEBUG: userdata before OP, userdata %lu-%lu, OP %lu-%lu\n",
+datentr->startLBA, datentr->endLBA, opentr->startLBA, opentr->endLBA);
+		if(datentr->endLBA+1!=opentr->startLBA) {
+			fprintf(stderr, "Error: userdata is non-contiguous "
+"with OP, unable to adjust\n");
+			return true;
+		}
+		startentr=opentr;
+		endentr=datentr;
+		delta=-delta;
+	} else if(datentr->startLBA>opentr->endLBA) {
+		if(verbose>=7) fprintf(stderr,
+"DEBUG: OP before userdata, OP %lu-%lu, userdata %lu-%lu\n",
+opentr->startLBA, opentr->endLBA, datentr->startLBA, datentr->endLBA);
+		if(datentr->startLBA!=opentr->endLBA+1) {
+			fprintf(stderr, "Error: userdata is non-contiguous "
+"with OP, unable to adjust\n");
+			return true;
+		}
+		startentr=datentr;
+		endentr=opentr;
+	} else {
+		fprintf(stderr, "Error: userdata and OP overlap???  Removing "
+"OP entry!\n");
+		memset(opentr, 0, sizeof(struct gpt_entry));
+		return true;
+	}
+	if(verbose>=4) fprintf(stderr,
+"DEBUG: OP: old start idx %lu old end idx %lu, delta=%+ld\n",
+startentr->startLBA, endentr->endLBA, delta);
+	startentr->startLBA+=delta;
+	endentr->endLBA+=delta;
+	if(verbose>=4) fprintf(stderr,
+"DEBUG: OP: new start %lu, new end %lu\n", startentr->startLBA,
+endentr->endLBA);
+
+	/* Yes, they ARE this perverse; adjust userdata first */
+	if(opsz<=0)
+		memset(opentr, 0, sizeof(struct gpt_entry));
+
+	return 1;
+}
+
+static struct gpt_entry *gptsort;
+static int _finish_gpt_reverse_sort_cur(const void *a, const void *b);
+static int _finish_gpt_reverse_sort_ord(const void *a, const void *b);
+static int finish_gpt_reverse(struct gpt_data *gpt)
+{
+	int ordered[sizeof(gpt_targets)/sizeof(gpt_targets[0])];
+	int i, lo, hi, cnt=0;
+
+	for(i=0; i<sizeof(gpt_targets)/sizeof(gpt_targets[0]); ++i)
+		if(~gpt_index[i]&&gpt_targets[i].order) ordered[cnt++]=i;
+
+	if(verbose>=7) {
+		fprintf(stderr, "DEBUG: %s: ordered", __func__);
+		for(i=0; i<cnt; ++i) fprintf(stderr, " %d", ordered[i]);
+		putc('\n', stderr);
+	}
+
+	if(cnt<=1) {
+		char out[40];
+		uuid_unparse(gpt->head.diskUuid, out);
+
+		if(verbose>=7) fprintf(stderr, "DEBUG: Skipping dev %s, %d "
+"notable\n", out, cnt);
+		return 1; /* not much we can do here */
+	}
+
+	if(verbose>=4) {
+		char out[40];
+		uuid_unparse(gpt->head.diskUuid, out);
+		fprintf(stderr, "DEBUG: Going to do %s, %d can be reordered\n",
+out, cnt);
+	}
+
+	gptsort=gpt->entry;
+	qsort(ordered, cnt, sizeof(int), _finish_gpt_reverse_sort_cur);
+
+	if(verbose>=7) {
+		fprintf(stderr, "DEBUG: %s: LBA sorted entries:\n", __func__);
+		for(i=0; i<cnt; ++i)
+			fprintf(stderr, "DEBUG: %s: start=%lu end=%lu\n",
+gpt->entry[gpt_index[ordered[i]]].name,
+gpt->entry[gpt_index[ordered[i]]].startLBA,
+gpt->entry[gpt_index[ordered[i]]].endLBA);
+	}
+
+	lo=0;
+	while(cnt-lo>=2) {
+		uint64_t base=gpt->entry[gpt_index[ordered[lo]]].startLBA;
+		hi=lo;
+		while(++hi<cnt)
+			if(gpt->entry[gpt_index[ordered[hi-1]]].endLBA+1!=
+gpt->entry[gpt_index[ordered[hi]]].startLBA) break;
+		if(hi-lo<2) {
+			if(verbose>=7) fprintf(stderr, "DEBUG: %s: Skipping "
+"reordering group of %d slices\n", __func__, hi-lo);
+			lo=hi;
+			continue;
+		}
+		if(verbose>=7) fprintf(stderr, "DEBUG: %s: Reordering group "
+"of %d slices\n", __func__, hi-lo);
+		qsort(ordered+lo, hi-lo, sizeof(int),
+_finish_gpt_reverse_sort_ord);
+		do {
+			struct gpt_entry *const entr=gpt->entry+gpt_index[ordered[lo]];
+			entr->endLBA-=entr->startLBA;
+			entr->startLBA=base;
+			base+=entr->endLBA+1;
+			entr->endLBA=base-1;
+			if(verbose>=7) fprintf(stderr, "DEBUG: %s: "
+"new entry for \"%s\" start=%lu end=%lu\n", __func__, entr->name,
+entr->startLBA, entr->endLBA);
+		} while(++lo<hi);
+	}
+
+	/* this is needed to deal with adjusting the size of OP */
+	finish_gpt_normal(gpt);
+
+	return 1;
+}
+static int _finish_gpt_reverse_sort_cur(const void *a, const void *b)
+{
+	return gptsort[gpt_index[*(int *)a]].startLBA-gptsort[gpt_index[*(int *)b]].startLBA;
+}
+static int _finish_gpt_reverse_sort_ord(const void *a, const void *b)
+{
+	return gpt_targets[*(int *)a].order-gpt_targets[*(int *)b].order;
+}
+
+
+static bool add_fix_gpt_entry(struct gpt_data *dst,
+struct gpt_buf *const unused0, unsigned short target, unsigned short index,
+const uint32_t unused1)
+{
+	if(verbose>=7) fprintf(stderr, "DEBUG: %s: target=%hu index=%hu, "
+"entry name=\"%s\"\n", __func__, target, index, dst->entry[index].name);
+	gpt_index[target]=index;
+	return true;
+}
+
+
+static int get_target(const char *const key)
+{
+	unsigned char lo=0, hi=sizeof(gpt_targets)/sizeof(gpt_targets[0]);
+	int res, mid;
+
+	while(mid=(hi+lo)/2, res=strcmp(key, gpt_targets[mid].name)) {
+		if(res<0) hi=mid;
+		else if(res>0) lo=mid+1;
+		if(lo==hi) return -1;
+	}
+	return mid;
 }
 
 
