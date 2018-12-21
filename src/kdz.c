@@ -515,17 +515,22 @@ gpt_type==GPT_PRIMARY?"primary":"backup", 'a'+dev);
 
 
 
-		/* check header fields, okay for the CRCs to differ */
+		/* check header fields, okay for the CRCs to differ
+		** Standard requires reserving space for 128 entries, whether
+		** or not that many are actually initialized.  As such the
+		** count can be legitimately increased. */
 		if(memcmp(&gptdev->head, &gptkdz->head,
 (char *)&gptdev->head.headerCRC32-(char *)&gptdev->head.magic)||
 memcmp(&gptdev->head.reserved, &gptkdz->head.reserved,
 (char *)&gptdev->head.altLBA-(char *)&gptdev->head.reserved)||
 memcmp(&gptdev->head.dataStartLBA, &gptkdz->head.dataStartLBA,
-(char *)&gptdev->head.entryCRC32-(char *)&gptdev->head.dataStartLBA))
+(char *)&gptdev->head.entryStart-(char *)&gptdev->head.dataStartLBA))
 			maxreturn=0; /* fail */
-		/* a device was encountered with the backup GPT's altLBA
-		** pointing at itself, rather than the primary GPT; this is
-		** apparently okay, but violates specifications... */
+		/* Extremely careful reading of the specification is needed.
+		** The Alternate LBA field is supposed to point to the LBA of
+		** the alternate GPT, whether or not the primary is being
+		** examined.  This is easy to misunderstand as the Alternate
+		** LBA pointing at the /other/ GPT. */
 		if(gptdev->head.altLBA!=gptkdz->head.altLBA&&
 gptkdz->head.altLBA!=1&&gptdev->head.altLBA!=gptkdz->head.myLBA)
 			maxreturn=0;
