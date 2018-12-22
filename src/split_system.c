@@ -63,7 +63,7 @@ vendinfo->id, vendinfo->dev);
 		if(strcmp(sysinfo->dev, vendinfo->dev)) {
 			fprintf(stderr,
 "vendor already exists and is on different device; unable to continue\n");
-			return 1;
+			return 128;
 		} else vendid=vendinfo->id;
 
 		free(vendinfo);
@@ -72,16 +72,15 @@ vendinfo->id, vendinfo->dev);
 	if(argc<=1) {
 		unsigned long long size, blocks;
 		if((fd=open(sysinfo->dev, O_LARGEFILE|O_RDONLY))) {
-			int errsave=errno;
 			fprintf(stderr, "Failed opening system device: %s\n",
 strerror(errno));
-			return errsave;
+			return 64;
 		}
 
 		if(!(info=readgpt(fd, GPT_ANY))) {
 			fprintf(stderr,
 "Failed to loading GPT of system device\n");
-			return 128;
+			return 32;
 		}
 
 		blocks=info->entry[sysinfo->id].endLBA-
@@ -106,10 +105,9 @@ info->entry[vendid].startLBA+1;
 #else
 	if((fd=open(sysinfo->dev, O_LARGEFILE|O_RDWR))<0) {
 #endif
-		int errsave=errno;
 		fprintf(stderr, "Failed opening system device: %s\n",
 strerror(errno));
-		return errsave;
+		return 128;
 	}
 
 	if(!(info=readgpt(fd, GPT_ANY))) {
@@ -121,13 +119,13 @@ strerror(errno));
 	size=strtoull(argv[1], NULL, 0);
 	if(errno) {
 		fprintf(stderr, "Error from strtoul(): %s\n", strerror(errno));
-		return 1;
+		return 7;
 	}
 
 	if(size%info->blocksz) {
 		fprintf(stderr, "Specified size (%lu bytes) not a multiple of "
 "block (%lu bytes), fail\n", size, info->blocksz);
-		return 1;
+		return 7;
 	}
 	size/=info->blocksz;
 
@@ -175,7 +173,7 @@ sizeof(struct gpt_entry)*++info->head.entryCount))) {
 		if(vendentr->startLBA-sysentr->endLBA!=1) {
 			fprintf(stderr,
 "system slice not next to vendor slice, unable to adjust\n");
-			return 1;
+			return 16;
 		}
 		sysentr->endLBA-=delta;
 		vendentr->startLBA-=delta;
@@ -183,17 +181,23 @@ sizeof(struct gpt_entry)*++info->head.entryCount))) {
 		if(sysentr->startLBA-vendentr->endLBA!=1) {
 			fprintf(stderr,
 "system slice not next to vendor slice, unable to adjust\n");
-			return 1;
+			return 16;
 		}
 		sysentr->startLBA+=delta;
 		vendentr->endLBA+=delta;
 	}
 
-	if(!writegpt(fd, info)) return 1;
+	if(!writegpt(fd, info)) {
+		fprintf(stderr, "GPT writing failed, state is unknown.\n");
+		return 8;
+	}
 
 #ifndef DEBUG
-	if(ioctl(fd, BLKRRPART, NULL)) fprintf(stderr,
+	if(ioctl(fd, BLKRRPART, NULL)) {
+		fprintf(stderr,
 "ioctl(BLKRRPART) failed, kernel still uses old GPT\n");
+		return 1;
+	}
 #endif
 
 	return 0;
