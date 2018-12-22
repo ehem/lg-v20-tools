@@ -192,6 +192,12 @@ sizeof(struct gpt_entry)*++info->head.entryCount))) {
 		return 8;
 	}
 
+	{ /* may be handled by TWRP/other, but do an initial pass ourselves */
+		char buf[60]; /* seems large, but who knows the future? */
+		snprintf(buf, sizeof(buf), "%s%u", sysinfo->dev, vendid);
+		symlink(buf, "/dev/block/bootdevice/by-name/vendor");
+	}
+
 #ifndef DEBUG
 	if(ioctl(fd, BLKRRPART, NULL)) {
 		fprintf(stderr,
