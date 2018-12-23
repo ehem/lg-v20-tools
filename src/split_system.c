@@ -89,7 +89,7 @@ info->entry[sysinfo->id].startLBA+1;
 		printf("%llu bytes (%llu blocks) currently allocated to "
 "system\n", size, blocks);
 
-		if(~vendid) {
+		if((unsigned short)~vendid) {
 			blocks=info->entry[vendid].endLBA-
 info->entry[vendid].startLBA+1;
 			size=blocks*info->blocksz;
@@ -131,7 +131,7 @@ strerror(errno));
 
 	sysentr=info->entry+sysinfo->id;
 
-	if(~vendid) vendentr=info->entry+vendid;
+	if((unsigned short)~vendid) vendentr=info->entry+vendid;
 	else {
 		int i;
 		const char *const vendor_name="vendor";
