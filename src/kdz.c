@@ -1168,35 +1168,77 @@ const char *const slice_name, const bool simulate)
 	short wrote=0, skip=0;
 
 	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
-		struct gpt_data *gptdev;
-		struct gpt_buf gpt_buf;
-
 		/* not the one */
 		if(strcmp(slice_name, kdz->chunks[i].dz.slice_name)) continue;
 
 		dev=kdz->chunks[i].dz.device;
+	}
 
-		gpt_buf.bufsz=kdz->devs[dev].len;
-		gpt_buf.buf=kdz->devs[dev].map;
+	/* Unfortunately we MUST compare with the GPT found in the KDZ file.
+	** If the device's GPT has been modified, the offsets found on the
+	** device GPT will differ from what the KDZ file has.  */
+	for(i=1; i<=kdz->dz_file.chunk_count; ++i) {
+		struct gpt_data *gptkdz;
+		struct gpt_buf gpt_buf;
+
+		struct unpackctx _ctx={0,}, *const ctx=&_ctx;
+
+		if(strcmp("PrimaryGPT", kdz->chunks[i].dz.slice_name)) continue;
+		if(kdz->chunks[i].dz.device!=dev) continue;
+
 
 		blksz=kdz->devs[dev].blksz;
 
-		if(!(gptdev=readgptb(gptbuffunc, &gpt_buf, blksz, GPT_ANY))) {
-			fprintf(stderr, "Failed to read GPT from /dev/block/sd%c\n", 'a'+dev);
+		gpt_buf.bufsz=(1<<14)+(blksz<<2); /* 16K for entries, +2 blk */
+		if(!(gpt_buf.buf=malloc(gpt_buf.bufsz))) {
+			fprintf(stderr, "Memory allocation failure when "
+"examining KDZ GPT\n");
 			return 0;
 		}
 
-		for(j=0; j<gptdev->head.entryCount-1; ++j) {
-			/* not the one */
-			if(strcmp(slice_name, gptdev->entry[j].name)) continue;
+                if(!unpackchunk_alloc(ctx, kdz, i)) {
+			fprintf(stderr, "Failed initializing decompression "
+"when examining KDZ GPT\n");
+			free(gpt_buf.buf);
+			return 0;
+		}
 
-			startLBA=gptdev->entry[j].startLBA;
+
+		if(unpackchunk(ctx, gpt_buf.buf, gpt_buf.bufsz)<=0) {
+			fprintf(stderr, "Failed during decompression when "
+"examining KDZ GPT\n");
+			free(gpt_buf.buf);
+			return 0;
+		}
+
+
+		if(!unpackchunk_free(ctx, true)) {
+			fprintf(stderr, "Failed cleanup after decompressing "
+"KDZ GPT\n");
+			free(gpt_buf.buf);
+			return 0;
+		}
+
+
+		if(!(gptkdz=readgptb(gptbuffunc, &gpt_buf, blksz, GPT_ANY))) {
+			fprintf(stderr, "Failed to load GPT from KDZ file\n");
+			free(gpt_buf.buf);
+			return 0;
+		}
+
+		free(gpt_buf.buf);
+
+		for(j=0; j<gptkdz->head.entryCount-1; ++j) {
+			/* not the one */
+			if(strcmp(slice_name, gptkdz->entry[j].name)) continue;
+
+			startLBA=gptkdz->entry[j].startLBA;
 			offset=startLBA*blksz;
 
 			break;
 		}
 
-		free(gptdev);
+		free(gptkdz);
 		/* fail */
 		if(!startLBA) return 0;
 		break;
