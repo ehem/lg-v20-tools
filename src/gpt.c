@@ -289,7 +289,7 @@ bool writegpt(int fd, const struct gpt_data *gpt)
 static bool __writegpt(int fd, struct _gpt_data *new, size_t blocksz);
 bool _writegpt(int fd, struct _gpt_data *new)
 {
-	size_t blocksz;
+	uint32_t blocksz;
 	uint64_t entryblks;
 
 	if(ioctl(fd, BLKSSZGET, &blocksz)==0) {
