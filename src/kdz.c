@@ -1460,10 +1460,10 @@ ctx->zstr.total_in, ctx->zstr.total_out);
 		return -1;
 	}
 
-	(*pMD5_Update)(&ctx->md5, buf, bufsz);
-	ctx->crc=crc32(ctx->crc, (Bytef *)buf, bufsz);
+	(*pMD5_Update)(&ctx->md5, buf, bufsz-ctx->zstr.avail_out);
+	ctx->crc=crc32(ctx->crc, (Bytef *)buf, bufsz-ctx->zstr.avail_out);
 
-	return bufsz;
+	return bufsz-ctx->zstr.avail_out;
 }
 
 
