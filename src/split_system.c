@@ -187,6 +187,9 @@ sizeof(struct gpt_entry)*++info->head.entryCount))) {
 		vendentr->endLBA+=delta;
 	}
 
+	/* if we're getting rid of it, completely erase it */
+	if(!size) memset(vendentr, 0, sizeof(struct gpt_entry));
+
 	if(!writegpt(fd, info)) {
 		fprintf(stderr, "GPT writing failed, state is unknown.\n");
 		return 8;
