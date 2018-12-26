@@ -29,6 +29,10 @@
 #include <endian.h>
 #include <errno.h>
 
+#ifdef LINEAGEOS
+#include <cutils/properties.h>
+#endif
+
 #include "bootimg.h"
 
 
@@ -46,9 +50,7 @@ const char magic[]="LGE ONE BINARY\0";
 
 char model_name[23]="";
 char sim_str[2]={'\0', '\0'};
-#ifndef LINEAGEOS
-char dsds_str[10]; //info->sim_num==2?"dsds":"none"
-#endif
+char dsds_str[10]; /* info->sim_num 1=>"none" 2=>"dsds" 3=>"tsts" */
 char cmdline[2048]; /* lots of slack so all the entries can be appended */
 
 
@@ -174,16 +176,28 @@ missing, others appear okay with value */
 
 	sim_str[0]='0'+sim_num;
 
+	strcpy(dsds_str, sim_num==1?"none":"dsds");  /* 3 => "tsts" */
 
 
+
+#ifdef LINEAGEOS
+	if (bootmode) {
+		/* The failure mode here is we simply hope everything goes
+		** well.  If getting the property fails, we'll end up telling
+		** cutils to replace the value.  If setting the property fails,
+		** there simply isn't much we can do.  */
+
+		const char *const key="persist.radio.multisim.config";
+		char value[PROPERTY_VALUE_MAX]="";
+
+		property_get(key, value, NULL);
+		if(strcmp(value, dsds_str))
+			property_set(key, dsds_str);
+	}
+#endif
 	if((i=write_sysfs(model_name, sim_str))<0) return 1;
 	if(i>0&&argc-optind==0&&!verbose) return 0;
 
-
-
-#ifndef LINEAGEOS
-	strcpy(dsds_str, sim_num==1?"none":"dsds");
-#endif
 
 
 	if(argc-optind==0) {
