@@ -1,5 +1,5 @@
 /* **********************************************************************
-* Copyright (C) 2017-2018 Elliott Mitchell				*
+* Copyright (C) 2017-2019 Elliott Mitchell				*
 *									*
 *	This program is free software: you can redistribute it and/or	*
 *	modify it under the terms of the GNU General Public License as	*
@@ -161,7 +161,7 @@ int main(int argc, char **argv)
 		ret=1;
 	usage:
 		fprintf(stderr,
-"Copyright (C) 2017-2018 Elliott Mitchell, distributed under GPLv3\n"
+"Copyright (C) 2017-2019 Elliott Mitchell, distributed under GPLv3\n"
 "Version: $Id$\n" "\n"
 "Usage: %s [-aBbchkMmOPqRrSstv] <KDZ file>\n"
 "  -h  Help, this message\n" "  -v  Verbose, increase verbosity\n"
@@ -260,11 +260,7 @@ int main(int argc, char **argv)
 			else if(ret==2) res="KDZ appears applicable to this device and matches original\n";
 			else if(ret<0) res="Failure while testing KDZ file\n";
 			else res="internal error: test_kdzfile() unknown return code\n";
-/* GCC is smart enough to ignore this, but CLANG isn't */
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wformat-security"
-			printf(res);
-#pragma clang diagnostic pop
+			puts(res);
 
 		}
 		break;
