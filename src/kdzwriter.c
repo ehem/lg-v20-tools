@@ -72,8 +72,9 @@ int main(int argc, char **argv)
 		MODE_MASK=0x0F,
 	} mode=0;
 	bool savekmods=1;
+	int force=0;
 
-	while((opt=getopt(argc, argv, "?aBbcHhkMmOPqRrSstv"))>=0) {
+	while((opt=getopt(argc, argv, "?aBbcFHhkMmOPqRrSstv"))>=0) {
 		switch(opt) {
 			int modecnt;
 		case 'r':
@@ -148,6 +149,10 @@ int main(int argc, char **argv)
 			if(verbose!=~((int)-1>>1)) --verbose;
 			break;
 
+		case 'F':
+			++force;
+			break;
+
 		default:
 			ret=1;
 		case 'h':
@@ -163,11 +168,12 @@ int main(int argc, char **argv)
 		fprintf(stderr,
 "Copyright (C) 2017-2019 Elliott Mitchell, distributed under GPLv3\n"
 "Version: $Id$\n" "\n"
-"Usage: %s [-aBbchkMmOPqRrSstv] <KDZ file>\n"
+"Usage: %s [-aBbcFhkMmOPqRrSstv] <KDZ file>\n"
 "  -h  Help, this message\n" "  -v  Verbose, increase verbosity\n"
 "  -q  Quiet, decrease verbosity\n"
 "  -t  Test, does the KDZ file appear applicable, simulates writing\n"
 "  -r  Report, list status of KDZ chunks\n"
+"  -F  Force, overrides safety checks, USE WITH GREAT CAUTION!\n"
 "  -a  Apply all, write all areas safe to write from KDZ\n"
 "  -s  System, write system area from KDZ\n"
 "  -M  Do NOT attempt to preserve old kernel modules\n"
@@ -315,10 +321,18 @@ argv[0]);
 		if((mode&WRITE)==WRITE) {
 			if(test_kdzfile(kdz)<=0) {
 				fprintf(stderr,
-"%s: This KDZ file does not appear to be applicable to this device,\n"
-"abandoning operation!\n", argv[0]);
-				ret=8;
-				goto abort;
+"%s: This KDZ file does not appear to be applicable to this device\n", argv[0]);
+
+				if(force<1) {
+					fprintf(stderr,
+"%s: Abandoning operation!\n", argv[0]);
+					ret=8;
+					goto abort;
+				}
+
+				fprintf(stderr,
+"%s: Forcing-mode operation enabled, overriding mismatch\n\n"
+"%s: Do not complain if operation fails\n\n", argv[0], argv[0]);
 			}
 
 			if(mode&SYSTEM&~SHAR_WRITE) {

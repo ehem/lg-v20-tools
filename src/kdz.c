@@ -369,8 +369,8 @@ int test_kdzfile(struct kdz_file *kdz)
 			{"msadp",		0x2}, /* worthwhile??? */
 			{"pmic",		0x2},
 			{"pmicbak",		0x2},
-			{"raw_resources",	0x2}, /* required, mod cand */
-			{"raw_resourcesbak",	0x3}, /* required */
+/*			{"raw_resources",	0x2}, ** mod candidate */
+			{"raw_resourcesbak",	0x2},
 			{"rpm",			0x2},
 			{"rpmbak",		0x2},
 			{"sec",			0x3}, /* required */
