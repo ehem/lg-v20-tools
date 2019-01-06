@@ -100,19 +100,23 @@ def dumpimage(file, offset):
 	image.write(u"# first unknown: (4 bytes)\n")
 	showbytes4le(params[4:8], image, u"# ")
 	params = params[8:]
-	image.write(u"# second unknown region: (16 bytes)\n")
-	showbytes8le(params[0:8], image, u"# ")
+	width = fmt4x1.unpack(params[0:4])[0]
+	height = fmt4x1.unpack(params[4:8])[0]
+	image.write(u"# second unknown region: (8 bytes)\n")
+	image.write(u"#\n")
 	showbytes8le(params[8:16], image, u"# ")
 
-	image.write(u"# width height (rough defaults)\n"+u"1000 1000\n")
+	image.write(u"# width height\n")
+	image.write(u"{:d} {:d}\n".format(width, height))
 	image.write(u"# maximum value (single byte, so 2^8-1)\n"+u"255\n")
 
 	print('Image name "{}"'.format(name))
 
 	file.seek(offset)
 	count = 0
+	pixels = 0
 
-	while count<(4<<20):
+	while pixels<width*height:
 		try:
 			pixel = file.read(4)
 		except IOError as err:
@@ -124,8 +128,11 @@ def dumpimage(file, offset):
 			return True
 		pixel = bytearray(pixel)
 		for ign in range(pixel[0]):
-			image.write(u"{:3d} {:3d} {:3d}\n".format(pixel[1], pixel[2], pixel[3]))
-		count += pixel[0]
+			image.write(u"{:3d} {:3d} {:3d}\n".format(pixel[3], pixel[2], pixel[1]))
+		pixels += pixel[0]
+		count += 1
+
+	image.write(u"# took {:d} chunks ({:d} bytes) to account for needed data\n".format(count, count<<2))
 
 	image.close()
 
