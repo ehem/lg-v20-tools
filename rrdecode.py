@@ -97,15 +97,15 @@ def dumpimage(file, offset):
 	image.write(u'# data file "{}" entry at 0x{:0X}'.format(name, offset))
 	offset = fmt4x1.unpack(params[0:4])[0]
 	image.write(u" image data starts at 0x{:0X}\n".format(offset))
-	image.write(u"# first unknown: (4 bytes)\n")
-	showbytes4le(params[4:8], image, u"# ")
+	expect = fmt4x1.unpack(params[4:8])[0]
 	params = params[8:]
 	width = fmt4x1.unpack(params[0:4])[0]
 	height = fmt4x1.unpack(params[4:8])[0]
-	image.write(u"# second unknown region: (8 bytes)\n")
-	image.write(u"#\n")
+	image.write(u"# unknown region: (8 bytes)\n")
 	showbytes8le(params[8:16], image, u"# ")
+	image.write(u"#\n")
 
+	image.write(u"# expecting 0x{0:08X}/0d{0:010d} bytes encoded\n".format(expect))
 	image.write(u"# width height\n")
 	image.write(u"{:d} {:d}\n".format(width, height))
 	image.write(u"# maximum value (single byte, so 2^8-1)\n"+u"255\n")
@@ -132,7 +132,10 @@ def dumpimage(file, offset):
 		pixels += pixel[0]
 		count += 1
 
-	image.write(u"# took {:d} chunks ({:d} bytes) to account for needed data\n".format(count, count<<2))
+	if count<<2 == expect:
+		image.write(u"# took expected 0x{0:08X}/0x{0:010d} bytes encoded\n".format(expect))
+	else:
+		image.write(u"# took unexpected 0x{0:X}/0d{0:d} chunks (0x{1:X}/0d{1:d} bytes) to account for needed data\n".format(count, count<<2))
 
 	image.close()
 
