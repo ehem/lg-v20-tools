@@ -70,19 +70,20 @@ def showbytes8le(str, file, prefix=u''):
 	file.write(u"{0}Value as integer bytes: {1:02X}/{1:03d} {2:02X}/{2:03d} {3:02X}/{3:03d} {4:02X}/{4:03d} {5:02X}/{5:03d} {6:02X}/{6:03d} {7:02X}/{7:03d}\n".format(prefix, vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7]))
 
 
+imageheaderfmt = struct.Struct("<40s4L8s")
 
 def dumpimage(file, offset):
 
 	file.seek(offset)
 
-	header = file.read(0x40)
+	header = file.read(imageheaderfmt.size)
 
-	if len(header) != 0x40:
+	if len(header) != imageheaderfmt.size:
 		print("Failed while attempting to read header at offset 0x{:04X}".format(offset))
 		sys.exit(1)
 
-	name = header[0:0x28].rstrip(b'\x00').decode("ascii")
-	params = header[0x28:]
+	name, dataoffset, expect, width, height, unknown = imageheaderfmt.unpack(header)
+	name = name.rstrip(b'\x00').decode("ascii")
 
 	if len(name)<=0:
 		return False
@@ -94,15 +95,12 @@ def dumpimage(file, offset):
 		sys.exit(1)
 
 	image.write(u"P3\n")
+
 	image.write(u'# data file "{}" entry at 0x{:0X}'.format(name, offset))
-	offset = fmt4x1.unpack(params[0:4])[0]
-	image.write(u" image data starts at 0x{:0X}\n".format(offset))
-	expect = fmt4x1.unpack(params[4:8])[0]
-	params = params[8:]
-	width = fmt4x1.unpack(params[0:4])[0]
-	height = fmt4x1.unpack(params[4:8])[0]
+	image.write(u" image data starts at 0x{:0X}\n".format(dataoffset))
+
 	image.write(u"# unknown region: (8 bytes)\n")
-	showbytes8le(params[8:16], image, u"# ")
+	showbytes8le(unknown, image, u"# ")
 	image.write(u"#\n")
 
 	image.write(u"# expecting 0x{0:08X}/0d{0:010d} bytes encoded\n".format(expect))
@@ -112,7 +110,7 @@ def dumpimage(file, offset):
 
 	print('Image name "{}"'.format(name))
 
-	file.seek(offset)
+	file.seek(dataoffset)
 	count = 0
 	pixels = 0
 
@@ -143,7 +141,7 @@ def dumpimage(file, offset):
 
 
 def dumpimages(file):
-	for offset in range(0x1000, 0x2000, 0x40):
+	for offset in range(0x1000, 0x2000, imageheaderfmt.size):
 		if not dumpimage(file, offset):
 			return
 
