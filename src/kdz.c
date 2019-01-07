@@ -1,5 +1,5 @@
 /* **********************************************************************
-* Copyright (C) 2017-2018 Elliott Mitchell				*
+* Copyright (C) 2017-2019 Elliott Mitchell				*
 *									*
 *	This program is free software: you can redistribute it and/or	*
 *	modify it under the terms of the GNU General Public License as	*
@@ -396,7 +396,11 @@ int test_kdzfile(struct kdz_file *kdz)
 		}
 
 		/* going for a lower-quality match */
-		if(!(maxreturn&matches[mid].result)) continue;
+		if(!(maxreturn&matches[mid].result)) {
+			if(verbose>4) fprintf(stderr,
+"DEBUG: Skipping check of \"%s\", match level too low\n", slice_name);
+			continue;
+		}
 
 
 		if(dz->device!=dev) {
@@ -434,12 +438,18 @@ memcmp(map+dz->target_addr*blksz+cur, buf, cmp)) mismatch=1;
 		if(!unpackchunk_free(ctx, false)) goto abort;
 
 		/* exact match, nothing to worry about */
-		if(!mismatch) continue;
+		if(!mismatch) {
+			if(verbose>4) fprintf(stderr,
+"DEBUG: \"%s\" matched perfectly\n", slice_name);
+			continue;
+		}
 
 
 		/* nuke some maxreturn bits, unless special-case match */
 		if(matches[mid].result<4) {
 			maxreturn&=~matches[mid].result;
+			if(verbose>4) fprintf(stderr,
+"DEBUG: Matching \"%s\" failed, new maxreturn=%d\n", slice_name, maxreturn);
 			continue;
 		}
 
@@ -543,6 +553,11 @@ gptkdz->entry+ii, gptdev->entry+ii);
 		free(gptdev);
 		free(gptkdz);
 
+		if(verbose>4) {
+			if(maxreturn>0) fprintf(stderr,
+"DEBUG: GPT matched sufficiently to remain candidate\n");
+			else fprintf(stderr, "DEBUG: GPT matching failed\n");
+		}
 
 	notfound:
 		/* basically a continue for this loop */
