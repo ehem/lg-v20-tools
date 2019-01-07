@@ -140,11 +140,7 @@ def dumpimage(file, offset):
 	return True
 
 
-def dumpimages(file):
-	for offset in range(0x1000, 0x2000, imageheaderfmt.size):
-		if not dumpimage(file, offset):
-			return
-
+headerfmt = struct.Struct("<16sL4s16sL")
 
 if __name__ == "__main__":
 	if len(sys.argv) != 2:
@@ -156,7 +152,15 @@ if __name__ == "__main__":
 		print('Failed while opening resources file "{}": {}'.format(sys.argv[1], str(err)), file=sys.stderr)
 		sys.exit(1)
 
-	magic = file.read(0x10)
+	header = file.read(headerfmt.size)
+	if len(header) != headerfmt.size:
+		print("Failed while attempting to read starting raw_resources header", file=sys.stderr)
+		sys.exit(1)
+
+	magic, count, unknown, dev, dataend = headerfmt.unpack(header)
+
+
+
 	if magic != b'BOOT_IMAGE_RLE\x00\x00':
 		print('Bad magic number (unknown format): {}'.format(magic.rstrip('\x00')), file=sys.stderr)
 		sys.exit(1)
@@ -169,23 +173,21 @@ if __name__ == "__main__":
 
 	notes.write(u'Found magic string "BOOT_IMAGE_RLE"\n\n')
 
-	str = file.read(0x08)
 
-	dev = file.read(0x10)
+	notes.write(u'Target device: "{}"\n'.format(dev.rstrip(b'\x00').decode("ascii")))
 
-	notes.write(u'Target device: "{}"\n\n'.format(dev.rstrip(b'\x00').decode("ascii")))
+	notes.write(u'Have {:d} image entries\n\n'.format(count))
 
-	notes.write(u"Lead unknown values (suspect pair of 4-byte values):\n")
-	showbytes8le(str, notes)
+	notes.write(u"Lead unknown value:\n")
 
-	str = file.read(0x04)
+	showbytes4le(unknown, notes)
 
-	if len(str) != 0x04:
-		print('Got too few bytes while reading resources file!', file=sys.stderr)
-		sys.exit(1)
 
-	notes.write(u"\nSecond unknown value (suspect length):\n")
-	showbytes4le(str, notes)
+	notes.write(u"\nData ends at address: 0x{0:08X}/{0:d}\n".format(dataend))
 
-	dumpimages(file)
+	for offset in range(0x1000, 0x1000+count*imageheaderfmt.size, imageheaderfmt.size):
+		if not dumpimage(file, offset):
+			print("Found too few images (expected {:d} got {:d})\n".format(count, (offset-0x1000)/imageheaderfmt.size), file=sys.stderr)
+			sys.exit(1)
+
 
