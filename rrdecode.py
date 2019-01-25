@@ -27,50 +27,7 @@ import io
 import struct
 
 
-fmt1x1 = struct.Struct('<B')
-
-def showbyte(str, file, prefix=u''):
-	vals = fmt1x2.unpack(str)
-	file.write(u"{0}Value as integer byte: {1:02X}/{1:03d}\n".format(prefix, vals[0]))
-
-fmt1x2 = struct.Struct('<BB')
-fmt2x1 = struct.Struct('<H')
-
-def showbytes2le(str, file, prefix=u''):
-	vals = fmt2x1.unpack(str)
-	file.write(u"{0}Value as 2-byte: {1:04X}/{1:05d}\n".format(prefix, vals[0]))
-	vals = fmt1x2.unpack(str)
-	file.write(u"{0}Value as integer bytes: {1:02X}/{1:03d} {2:02X}/{2:03d}\n".format(prefix, vals[0], vals[1]))
-
-fmt1x4 = struct.Struct('<BBBB')
-fmt2x2 = struct.Struct('<HH')
-fmt4x1 = struct.Struct('<L')
-
-def showbytes4le(str, file, prefix=u''):
-	vals = fmt4x1.unpack(str)
-	file.write(u"{0}Value as 4-byte: {1:08X}/{1:010d}\n".format(prefix, vals[0]))
-	vals = fmt2x2.unpack(str)
-	file.write(u"{0}Value as pair 2-byte: {1:04X}/{1:05d} {2:04X}/{2:05d}\n".format(prefix, vals[0], vals[1]))
-	vals = fmt1x4.unpack(str)
-	file.write(u"{0}Value as integer bytes: {1:02X}/{1:03d} {2:02X}/{2:03d} {3:02X}/{3:03d} {4:02X}/{4:03d}\n".format(prefix, vals[0], vals[1], vals[2], vals[3]))
-
-fmt1x8 = struct.Struct('<BBBBBBBB')
-fmt2x4 = struct.Struct('<HHHH')
-fmt4x2 = struct.Struct('<LL')
-fmt8x1 = struct.Struct('<Q')
-
-def showbytes8le(str, file, prefix=u''):
-	vals = fmt8x1.unpack(str)
-	file.write(u"{0}Value as 8-byte: {1:016X}/{1:020d}\n".format(prefix, vals[0]))
-	vals = fmt4x2.unpack(str)
-	file.write(u"{0}Value as pair 4-byte: {1:08X}/{1:010d} {2:08X}/{2:010d}\n".format(prefix, vals[0], vals[1]))
-	vals = fmt2x4.unpack(str)
-	file.write(u"{0}Value as quad 2-byte: {1:04X}/{1:05d} {2:04X}/{2:05d} {3:04X}/{3:05d} {4:04X}/{4:05d}\n".format(prefix, vals[0], vals[1], vals[2], vals[3]))
-	vals = fmt1x8.unpack(str)
-	file.write(u"{0}Value as integer bytes: {1:02X}/{1:03d} {2:02X}/{2:03d} {3:02X}/{3:03d} {4:02X}/{4:03d} {5:02X}/{5:03d} {6:02X}/{6:03d} {7:02X}/{7:03d}\n".format(prefix, vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7]))
-
-
-imageheaderfmt = struct.Struct("<40s4L8s")
+imageheaderfmt = struct.Struct("<40s6L")
 
 def dumpimage(file, offset):
 
@@ -82,7 +39,7 @@ def dumpimage(file, offset):
 		print("Failed while attempting to read header at offset 0x{:04X}".format(offset))
 		sys.exit(1)
 
-	name, dataoffset, expect, width, height, unknown = imageheaderfmt.unpack(header)
+	name, dataoffset, expect, width, height, unknown0, unknown1 = imageheaderfmt.unpack(header)
 	name = name.rstrip(b'\x00').decode("ascii")
 
 	if len(name)<=0:
@@ -99,9 +56,9 @@ def dumpimage(file, offset):
 	image.write(u'# data file "{}" entry at 0x{:0X}'.format(name, offset))
 	image.write(u" image data starts at 0x{:0X}\n".format(dataoffset))
 
-	image.write(u"# unknown region: (8 bytes)\n")
-	showbytes8le(unknown, image, u"# ")
-	image.write(u"#\n")
+	image.write(u"# first unknown (suspect timeout/flags): 0x{0:08X}/0d{0:010d}\n".format(unknown0))
+
+	image.write(u"# second unknown (suspect vertical/background value): 0x{0:08X}/0d{0:010d}\n".format(unknown1))
 
 	image.write(u"# expecting 0x{0:08X}/0d{0:010d} bytes encoded\n".format(expect))
 	image.write(u"# width height\n")
@@ -140,7 +97,7 @@ def dumpimage(file, offset):
 	return True
 
 
-headerfmt = struct.Struct("<16sL4s16sL")
+headerfmt = struct.Struct("<16s2L16s1L")
 
 if __name__ == "__main__":
 	if len(sys.argv) != 2:
@@ -178,9 +135,7 @@ if __name__ == "__main__":
 
 	notes.write(u'Have {:d} image entries\n\n'.format(count))
 
-	notes.write(u"Lead unknown value:\n")
-
-	showbytes4le(unknown, notes)
+	notes.write(u"Lead unknown value: 0x{0:08X}/0d{0:010d}\n".format(unknown))
 
 
 	notes.write(u"\nData ends at address: 0x{0:08X}/{0:d}\n".format(dataend))
