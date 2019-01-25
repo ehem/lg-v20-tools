@@ -64,6 +64,9 @@ def dumpimage(file, offset):
 	image.write(u"# to be displayed starting at line {:d}\n".format(screenoffset))
 	image.write(u"# maximum value (single byte, so 2^8-1)\n"+u"255\n")
 
+	image.write(u"# raw pixel data as decimal values, 0 = black, 255 = maximum intensity\n")
+	image.write(u"# {:d} pixels, one per line; red green blue order\n".format(width*height))
+
 	print('Image name "{}"'.format(name))
 
 	file.seek(dataoffset)
