@@ -39,7 +39,7 @@ def dumpimage(file, offset):
 		print("Failed while attempting to read header at offset 0x{:04X}".format(offset))
 		sys.exit(1)
 
-	name, dataoffset, expect, width, height, unknown0, unknown1 = imageheaderfmt.unpack(header)
+	name, dataoffset, expect, width, height, unknown0, screenoffset = imageheaderfmt.unpack(header)
 	name = name.rstrip(b'\x00').decode("ascii")
 
 	if len(name)<=0:
@@ -58,11 +58,10 @@ def dumpimage(file, offset):
 
 	image.write(u"# first unknown (suspect timeout/flags): 0x{0:08X}/0d{0:010d}\n".format(unknown0))
 
-	image.write(u"# second unknown (suspect vertical/background value): 0x{0:08X}/0d{0:010d}\n".format(unknown1))
-
 	image.write(u"# expecting 0x{0:08X}/0d{0:010d} bytes encoded\n".format(expect))
 	image.write(u"# width height\n")
 	image.write(u"{:d} {:d}\n".format(width, height))
+	image.write(u"# to be displayed starting at line {:d}\n".format(screenoffset))
 	image.write(u"# maximum value (single byte, so 2^8-1)\n"+u"255\n")
 
 	print('Image name "{}"'.format(name))
