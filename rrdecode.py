@@ -61,7 +61,7 @@ def dumpimage(file, offset):
 	image.write(u"# expecting 0x{0:08X}/0d{0:010d} bytes encoded\n".format(expect))
 	image.write(u"# width height\n")
 	image.write(u"{:d} {:d}\n".format(width, height))
-	image.write(u"# to be displayed starting at line {:d}\n".format(screenoffset))
+	image.write(u'# top of image on line {:d} of screen (includes +160 for "second screen")\n'.format(screenoffset))
 	image.write(u"# maximum value (single byte, so 2^8-1)\n"+u"255\n")
 
 	image.write(u"# raw pixel data as decimal values, 0 = black, 255 = maximum intensity\n")
