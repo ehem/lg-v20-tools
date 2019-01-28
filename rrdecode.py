@@ -27,6 +27,40 @@ import io
 import struct
 
 
+#
+# Notes on images:
+#
+# The code functions as documentation on what I've figured out about the
+# format.  The initial string is pretty much a filename.  This is almost
+# certainly the key for the bootloader finding a particular image.  The
+# numbers are identified by the associated variables on the .unpack line.
+#
+# The expect value appears to be a specification of number of bytes to
+# load.  Normally this matches the full data length encoding the image,
+# but in one instance the encoded data length was less than this value
+# (an extra zero-length RLE chunk is loaded if you decode the full
+# length).
+#
+# On LGE V10s and LGE V20s the screenoffset is an offset from the
+# absolute top of display, including the "second screen".  As such the
+# apparent starting line is 160 lines above the obvious interpretation.
+#
+# This format doesn't absolutely require any alignment.  In real life
+# all images were aligned to multiples of 0x1000.  This is notably the
+# page size of the flash storage.  I've got two theories as to the
+# reason.  First, given the qualities of the encoded images (often
+# encoding unnecessarily large borders, sometimes marking data size as
+# larger than needed, and in one instance omitting a border) I suspect
+# LGE's software for building these images could be very poor quality and
+# simply assumes 4KB for internal reasons, and there is no need for
+# alignment.  Second, in the limited bootloader environment it is much
+# easier to access whole device blocks or memory pages, and using
+# misaligned image could crash the bootloader.
+#
+# I suspect the unknown value are flags.  A must advise against changing
+# due to danger of crashing bootloader.
+#
+
 imageheaderfmt = struct.Struct("<40s6L")
 
 def dumpimage(file, offset, blocksize):
@@ -110,7 +144,19 @@ def dumpimage(file, offset, blocksize):
 dumpimage.previous = 0
 
 
-headerfmt = struct.Struct("<16s2L16s1L")
+#
+# The fields a pretty much identified by their variable names on the
+# .unpack() line.
+#
+# dataend appears to reliably point to the end of useful data.  This
+# omits any padding.
+#
+# Having looked at a few raw_resources files, I suspect the unknown is
+# some flavor of version number.  Likely the value should be preserved
+# with any modifications.
+#
+
+headerfmt = struct.Struct("<16s2L16sL")
 
 if __name__ == "__main__":
 	if len(sys.argv) != 2:
