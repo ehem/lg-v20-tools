@@ -26,6 +26,8 @@ import sys
 import io
 import struct
 
+from PIL import Image
+
 
 #
 # Notes on images:
@@ -80,9 +82,9 @@ def dumpimage(file, offset, blocksize):
 		return False
 
 	try:
-		image = io.open(name+".ppm", "w")
+		image = io.open(name+".notes", "w")
 	except IOError as err:
-		print('Failed while opening image file "{}": {}'.format(name+".ppm", str(err)), file=sys.stderr)
+		print('Failed while opening notes file "{}": {}'.format(name+".notes", str(err)), file=sys.stderr)
 		sys.exit(1)
 
 	image.write(u"P3\n")
@@ -96,7 +98,7 @@ def dumpimage(file, offset, blocksize):
 		image.write(u"# data starts at block boundary\n")
 
 	image.write(u"# expecting 0x{0:08X}/0d{0:010d} bytes encoded\n".format(expect))
-	image.write(u"# width height\n")
+	image.write(u"# width={:d} height={:d}\n".format(width, height))
 	image.write(u"{:d} {:d}\n".format(width, height))
 	image.write(u"# displayed {:d} columns from left, {:d} lines from top\n".format(offsetX, offsetY))
 	image.write(u'# NOTE: For V10/V20 the vertical offset includes +160 for "second screen"\n')
@@ -111,6 +113,9 @@ def dumpimage(file, offset, blocksize):
 		print('Note: data "{:s}" is before other images'.format(name), file=sys.stderr)
 	else:
 		dumpimage.previous = dataoffset
+
+	im = Image.frombytes("RGB", (1,1), b"\x00\x00\x00")
+	im = im.resize((width, height))
 
 	file.seek(dataoffset)
 	count = 0
@@ -127,9 +132,14 @@ def dumpimage(file, offset, blocksize):
 			image.close()
 			return True
 		pixel = bytearray(pixel)
-		for ign in range(pixel[0]):
-			image.write(u"{:3d} {:3d} {:3d}\n".format(pixel[3], pixel[2], pixel[1]))
-		pixels += pixel[0]
+		# this RLE format allows lines to wrap around!
+		next = pixels + pixel[0]
+		if pixels//width != next//width:
+			im.paste((pixel[3],pixel[2],pixel[1]), (pixels%width,pixels//width,width,pixels//width+1))
+			im.paste((pixel[3],pixel[2],pixel[1]), (0,next//width,next%width,next//width+1))
+		else:
+			im.paste((pixel[3],pixel[2],pixel[1]), (pixels%width,pixels//width,next%width,next//width+1))
+		pixels = next
 		count += 1
 
 	if count<<2 == expect:
@@ -138,6 +148,12 @@ def dumpimage(file, offset, blocksize):
 		image.write(u"# took unexpected 0x{0:X}/0d{0:d} chunks (0x{1:X}/0d{1:d} bytes) to account for needed data\n".format(count, count<<2))
 
 	image.close()
+
+	try:
+		im.save(name+".png")
+	except IOError as err:
+		print('Failed while saving image file "{}": {}'.format(name+".png", str(err)), file=sys.stderr)
+		sys.exit(1)
 
 	return True
 
