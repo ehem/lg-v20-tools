@@ -136,7 +136,10 @@ def dumpimage(file, offset, blocksize):
 		next = pixels + pixel[0]
 		if pixels//width != next//width:
 			im.paste((pixel[3],pixel[2],pixel[1]), (pixels%width,pixels//width,width,pixels//width+1))
-			im.paste((pixel[3],pixel[2],pixel[1]), (0,next//width,next%width,next//width+1))
+			if next//width > height:
+				print('Alert: Payload for "{:s}" includes pixels beyond bottom border!'.format(name), file=sys.stderr)
+			else:
+				im.paste((pixel[3],pixel[2],pixel[1]), (0,next//width,next%width,next//width+1))
 		else:
 			im.paste((pixel[3],pixel[2],pixel[1]), (pixels%width,pixels//width,next%width,next//width+1))
 		pixels = next
