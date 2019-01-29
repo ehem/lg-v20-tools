@@ -29,7 +29,7 @@ import struct
 
 imageheaderfmt = struct.Struct("<40s6L")
 
-def dumpimage(file, offset):
+def dumpimage(file, offset, blocksize):
 
 	file.seek(offset)
 
@@ -55,6 +55,11 @@ def dumpimage(file, offset):
 
 	image.write(u'# data file "{}" entry at 0x{:0X}'.format(name, offset))
 	image.write(u" image data starts at 0x{:0X}\n".format(dataoffset))
+	if dataoffset&(blocksize-1):
+		image.write(u"# NOTICE THIS IMAGE IS MISALIGNED! (blocksize={:d})\n".format(blocksize))
+		print('Notice: "{:s}" uses misaligned data (never before seen)'.format(name), file=sys.stderr)
+	else:
+		image.write(u"# data starts at block boundary\n")
 
 	image.write(u"# expecting 0x{0:08X}/0d{0:010d} bytes encoded\n".format(expect))
 	image.write(u"# width height\n")
@@ -161,7 +166,7 @@ if __name__ == "__main__":
 	print("Probe found a blocksize of {:d} (shift={:d})".format(blocksize, shift))
 
 	for offset in range(blocksize, blocksize+count*imageheaderfmt.size, imageheaderfmt.size):
-		if not dumpimage(file, offset):
+		if not dumpimage(file, offset, blocksize):
 			print("Found too few images (expected {:d} got {:d})\n".format(count, (offset-blocksize)/imageheaderfmt.size), file=sys.stderr)
 			sys.exit(1)
 
