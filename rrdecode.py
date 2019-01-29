@@ -39,7 +39,7 @@ def dumpimage(file, offset):
 		print("Failed while attempting to read header at offset 0x{:04X}".format(offset))
 		sys.exit(1)
 
-	name, dataoffset, expect, width, height, unknown0, screenoffset = imageheaderfmt.unpack(header)
+	name, dataoffset, expect, width, height, offsetX, offsetY = imageheaderfmt.unpack(header)
 	name = name.rstrip(b'\x00').decode("ascii")
 
 	if len(name)<=0:
@@ -56,12 +56,11 @@ def dumpimage(file, offset):
 	image.write(u'# data file "{}" entry at 0x{:0X}'.format(name, offset))
 	image.write(u" image data starts at 0x{:0X}\n".format(dataoffset))
 
-	image.write(u"# first unknown (suspect timeout/flags): 0x{0:08X}/0d{0:010d}\n".format(unknown0))
-
 	image.write(u"# expecting 0x{0:08X}/0d{0:010d} bytes encoded\n".format(expect))
 	image.write(u"# width height\n")
 	image.write(u"{:d} {:d}\n".format(width, height))
-	image.write(u'# top of image on line {:d} of screen (includes +160 for "second screen")\n'.format(screenoffset))
+	image.write(u"# displayed {:d} columns from left, {:d} lines from top\n".format(offsetX, offsetY))
+	image.write(u'# NOTE: For V10/V20 the vertical offset includes +160 for "second screen"\n')
 	image.write(u"# maximum value (single byte, so 2^8-1)\n"+u"255\n")
 
 	image.write(u"# raw pixel data as decimal values, 0 = black, 255 = maximum intensity\n")
