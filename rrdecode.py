@@ -136,14 +136,32 @@ if __name__ == "__main__":
 
 	notes.write(u'Have {:d} image entries\n\n'.format(count))
 
-	notes.write(u"Lead unknown value: 0x{0:08X}/0d{0:010d}\n".format(unknown))
+	notes.write(u"Data ends at address: 0x{0:08X}/{0:d}\n".format(dataend))
 
+	notes.write(u"\nLead unknown value: 0x{0:08X}/0d{0:010d}\n".format(unknown))
 
-	notes.write(u"\nData ends at address: 0x{0:08X}/{0:d}\n".format(dataend))
+	# probe the size
+	for shift in range(9,20):
+		blocksize = 1<<shift
+		file.seek(blocksize)
 
-	for offset in range(0x1000, 0x1000+count*imageheaderfmt.size, imageheaderfmt.size):
-		if not dumpimage(file, offset):
-			print("Found too few images (expected {:d} got {:d})\n".format(count, (offset-0x1000)/imageheaderfmt.size), file=sys.stderr)
+		header = file.read(imageheaderfmt.size)
+		if len(header) != imageheaderfmt.size:
+			print("Failed while attempting to probe at shift {:d} (blocksize {:d})".format(shift, blocksize), file=sys.stderr)
 			sys.exit(1)
 
+		name = imageheaderfmt.unpack(header)[0].rstrip(b'\x00').decode("ascii")
+
+		if len(name)>0:
+			break
+	else:
+		print("Probing failed to find image headers/blocksize", file=sys.stderr)
+		sys.exit(1)
+
+	print("Probe found a blocksize of {:d} (shift={:d})".format(blocksize, shift))
+
+	for offset in range(blocksize, blocksize+count*imageheaderfmt.size, imageheaderfmt.size):
+		if not dumpimage(file, offset):
+			print("Found too few images (expected {:d} got {:d})\n".format(count, (offset-blocksize)/imageheaderfmt.size), file=sys.stderr)
+			sys.exit(1)
 
