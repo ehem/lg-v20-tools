@@ -26,6 +26,8 @@ import sys
 import io
 import struct
 
+from collections import deque
+
 
 imageheaderfmt = struct.Struct("<40s6L")
 
@@ -131,6 +133,20 @@ class RRImage:
 		self.input.seek(self.dataoffset)
 		self.payload = self.input.read(self.expect)
 
+
+		self.splitpayload()
+
+		# Remove top border
+
+		# Remove bottom border
+
+		# Remove left border
+
+		# Remove right border
+
+		self.joinpayload()
+
+
 	def finish(self):
 		# align to blocksize
 		RRImage.used += self.blocksize-1
@@ -145,6 +161,69 @@ class RRImage:
 
 		self.output.seek(self.offset)
 		self.output.write(header)
+
+
+	def splitpayload(self):
+
+		payload = deque()
+
+		while self.payload:
+			count = ord(self.payload[0])
+			current = 0
+			while count < self.width and len(self.payload) > current+4:
+				current += 4
+				count += ord(self.payload[current])
+			payload.append(self.payload[:current])
+			if count == self.width:
+				payload[-1] += self.payload[current:current+4]
+				self.payload = self.payload[current+4:]
+			elif count > self.width:
+				count -= self.width
+				payload[-1] += chr(ord(self.payload[current])-count)+self.payload[current+1:current+4]
+				self.payload = chr(count)+self.payload[current+1:]
+			else:
+				payload.pop()
+				self.payload = b''
+				print('Warning, payload for "{:s}" was wrong length!'.format(self.name), file=sys.stderr)
+
+		# Potentially caused by other tools screwing up
+		if len(payload) < self.height:
+			print('Found insufficient payload data for "{:s}"'.format(self.name), file=sys.stderr)
+			self.height = len(payload)
+		# Yes, this really has been seen in nature
+		if len(payload) > self.height:
+			print('Found excess payload data for "{:s}"'.format(self.name), file=sys.stderr)
+			while len(payload) > self.height:
+				payload.pop()
+
+		self.payload = payload
+
+
+	def joinpayload(self):
+
+		payload = self.payload
+
+		pixel = payload[0][-3:]
+		count = ord(payload[0][-4])
+		self.payload = payload.popleft()[:-4]
+
+		while payload:
+			if count >= 255:
+				self.payload += '\xFF' + pixel
+				count -= 255
+			elif payload[0][1:3] == pixel:
+				count += ord(payload[0][0])
+				payload[0] = payload[0][4:]
+				if not payload[0]:
+					payload.popleft()
+			else:
+				self.payload += chr(count) + pixel
+				pixel = payload[0][-3:]
+				count = ord(payload[0][-4])
+				self.payload += payload.popleft()[:-4]
+
+		if count:
+			self.payload += chr(count) + pixel
 
 
 if __name__ == "__main__":
