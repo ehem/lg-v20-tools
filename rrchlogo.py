@@ -114,6 +114,15 @@ class RRImage:
 			entry.finish()
 
 
+	@staticmethod
+	def dolate():
+		for entr in RRImage.delayed:
+			entr.payload = b''
+			entr.height = 1
+
+		for entr in RRImage.delayed:
+			entr.finish()
+
 	def merge(self, other):
 		print("Entry in merge table, implement merge")
 		pass
@@ -203,6 +212,8 @@ if __name__ == "__main__":
 
 	for offset in range(blocksize, blocksize+count*imageheaderfmt.size, imageheaderfmt.size):
 		RRImage.entry(offset)
+
+	RRImage.dolate()
 
 
 	header = headerfmt.pack(magic, count, unknown, dev, RRImage.used)
