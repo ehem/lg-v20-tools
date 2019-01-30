@@ -73,6 +73,11 @@ def dumpimage(file, offset, blocksize):
 
 	print('Image name "{}"'.format(name))
 
+	if dataoffset < dumpimage.previous:
+		print('Note: data "{:s}" is before other images'.format(name), file=sys.stderr)
+	else:
+		dumpimage.previous = dataoffset
+
 	file.seek(dataoffset)
 	count = 0
 	pixels = 0
@@ -101,6 +106,8 @@ def dumpimage(file, offset, blocksize):
 	image.close()
 
 	return True
+
+dumpimage.previous = 0
 
 
 headerfmt = struct.Struct("<16s2L16s1L")
