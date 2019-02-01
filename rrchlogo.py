@@ -140,9 +140,9 @@ class RRImage:
 
 		self.removebottom()
 
-		# Remove left border
+		self.removeleft()
 
-		# Remove right border
+		self.removeright()
 
 		self.joinpayload()
 
@@ -271,6 +271,95 @@ class RRImage:
 					payload.pop()
 					self.height -= 1
 					self.removedbottom += 1
+
+		self.payload = payload
+
+
+	def removeleft(self):
+
+		self.removedleft = 0
+
+		payload = self.payload
+
+		pixel = payload[0][1:4]
+		max = ord(payload[0][0])
+		for x in range(4, len(payload[0]), 4):
+			if payload[0][x+1:x+4] != pixel:
+				max -= 1
+				break
+			max += ord(payload[0][x])
+
+		for y in range(1, len(payload)):
+			cur = 0
+			for x in range(0, len(payload[y]), 4):
+				if payload[y][x+1:x+4] != pixel:
+					max = cur - 1
+					break
+				cur += ord(payload[y][x])
+				if cur >= max:
+					break
+
+		if max < 0:
+			max = 0
+
+		for y in range(0, len(payload)):
+			cur = max
+			for x in range(0, len(payload[y]), 4):
+				if ord(payload[y][x]) == cur:
+					payload[y] = payload[y][x+4:]
+					break
+				elif ord(payload[y][x]) > cur:
+					payload[y] = chr(ord(payload[y][x])-cur) + payload[y][x+1:]
+					break
+				cur -= ord(payload[y][x])
+
+		self.offsetX += max
+		self.width -= max
+		self.removedleft += max
+
+		self.payload = payload
+
+
+	def removeright(self):
+
+		self.removedright = 0
+
+		payload = self.payload
+
+		pixel = payload[0][-3:]
+		max = ord(payload[0][-4])
+		for x in range(len(payload[0])-8, -1, -4):
+			if payload[0][x+1:x+4] != pixel:
+				max -= 1
+				break
+			max += ord(payload[0][x])
+
+		for y in range(1, len(payload)):
+			cur = 0
+			for x in range(len(payload[y])-4, -1, -4):
+				if payload[y][x+1:x+4] != pixel:
+					max = cur - 1
+					break
+				cur += ord(payload[y][x])
+				if cur >= max:
+					break
+
+		if max < 0:
+			max = 0
+
+		for y in range(0, len(payload)):
+			cur = max
+			for x in range(len(payload[y])-4, -1, -4):
+				if ord(payload[y][x]) == cur:
+					payload[y] = payload[y][:x]
+					break
+				elif ord(payload[y][x]) > cur:
+					payload[y] = payload[y][:x] + chr(ord(payload[y][x])-cur) + payload[y][x+1:x+4]
+					break
+				cur -= ord(payload[y][x])
+
+		self.width -= max
+		self.removedright += max
 
 		self.payload = payload
 
