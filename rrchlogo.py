@@ -136,9 +136,9 @@ class RRImage:
 
 		self.splitpayload()
 
-		# Remove top border
+		self.removetop()
 
-		# Remove bottom border
+		self.removebottom()
 
 		# Remove left border
 
@@ -224,6 +224,55 @@ class RRImage:
 
 		if count:
 			self.payload += chr(count) + pixel
+
+
+	def removetop(self):
+
+		self.removedtop = 0
+
+		payload = self.payload
+
+		pixel = payload[0][1:4]
+		for x in range(5, len(payload[0]), 4):
+			if payload[0][x:x+3] != pixel:
+				break
+		else:
+			while pixel:
+				for x in range(1, len(payload[1]), 4):
+					if payload[1][x:x+3] != pixel:
+						pixel = None
+						break
+				else:
+					payload.popleft()
+					self.offsetY += 1
+					self.height -= 1
+					self.removedtop += 1
+
+		self.payload = payload
+
+
+	def removebottom(self):
+
+		self.removedbottom = 0
+
+		payload = self.payload
+
+		pixel = payload[-1][1:4]
+		for x in range(5, len(payload[-1]), 4):
+			if payload[-1][x:x+3] != pixel:
+				break
+		else:
+			while pixel:
+				for x in range(1, len(payload[-2]), 4):
+					if payload[-2][x:x+3] != pixel:
+						pixel = None
+						break
+				else:
+					payload.pop()
+					self.height -= 1
+					self.removedbottom += 1
+
+		self.payload = payload
 
 
 if __name__ == "__main__":
