@@ -112,6 +112,7 @@ class RRImage:
 				RRImage.mergetab[key] = entry
 
 		else:
+			entry.load()
 			entry.shrink()
 			entry.finish()
 
@@ -129,11 +130,13 @@ class RRImage:
 		print("Entry in merge table, implement merge")
 		pass
 
-	def shrink(self):
+
+	def load(self):
 		self.input.seek(self.dataoffset)
 		self.payload = self.input.read(self.expect)
 
 
+	def shrink(self):
 		self.splitpayload()
 
 		self.removetop()
