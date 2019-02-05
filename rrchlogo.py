@@ -105,11 +105,13 @@ class RRImage:
 		entry = RRImage(offset, name, dataoffset, expect, width, height, offsetX, offsetY)
 
 		if later:
-			RRImage.delayed.append(entry)
 			if key in RRImage.mergetab:
-				RRImage.mergetab[key].merge(entry)
+				RRImage.mergetab[key].merge(key, entry)
 			else:
-				RRImage.mergetab[key] = entry
+				RRImage.delayed.append(entry)
+				if key:
+					RRImage.mergetab[key] = entry
+					entry.merge(key, entry)
 
 		else:
 			entry.load()
@@ -118,17 +120,114 @@ class RRImage:
 
 
 	@staticmethod
-	def dolate():
+	def late():
 		for entr in RRImage.delayed:
-			entr.payload = b''
-			entr.height = 1
+			entr.dolate()
 
-		for entr in RRImage.delayed:
-			entr.finish()
 
-	def merge(self, other):
-		print("Entry in merge table, implement merge")
-		pass
+	def dolate(self):
+		try:
+			if len(self.mergers) <= 1:
+				raise AttributeError()
+		except AttributeError:
+			self.load()
+			self.shrink()
+			self.finish()
+			return
+
+		other = self.mergers[1]
+
+		self.load()
+		other.load()
+
+		# Easier case, complete overlap
+		if self.payload == other.payload:
+			self.shrink()
+			self.finish()
+
+			other.width = self.width
+			other.height = self.height
+
+			other.offsetX += self.removedleft
+			other.offsetY += self.removedtop
+
+			header = imageheaderfmt.pack(other.name.encode("ascii"), self.used, len(self.payload), other.width, other.height, other.offsetX, other.offsetY)
+
+			other.output.seek(other.offset)
+			other.output.write(header)
+
+		# Harder case, incomplete overlap
+		else:
+			self.splitpayload()
+			other.splitpayload()
+
+			check = self.height if self.height <= other.height else other.height
+
+			for l in range(check):
+				if self.payload[l] != other.payload[l]:
+					RRImage.delayed.append(other)
+					return
+
+			# sharing common header
+
+			if self.height <= other.height:
+				small = self
+				large = other
+			else:
+				large = self
+				small = other
+
+			large._shrink()
+			small.removebottom()
+
+			small.offsetY += large.removedtop
+			small.offsetX += large.removedleft
+			small.width = large.width
+
+			small.height -= large.removedtop
+
+			if small.height > large.height - small.height:
+				small.payload = large.payload
+				large.payload = deque()
+				while len(small.payload) > small.height:
+					large.payload.appendleft(small.payload.pop())
+			else:
+				small.payload = deque()
+				while len(small.payload) < small.height:
+					small.payload.append(large.payload.popleft())
+
+			small.joinpayload()
+			large.joinpayload()
+
+			large.used += large.blocksize-1
+			large.used &= ~(large.blocksize-1)
+			small.used = large.used
+
+			large.output.seek(large.used)
+			large.output.write(small.payload)
+			large.output.write(large.payload)
+
+			small.payload = len(small.payload)
+			large.payload = small.payload + len(large.payload)
+			RRImage.used = large.used + large.payload
+
+			header = imageheaderfmt.pack(self.name.encode("ascii"), self.used, self.payload, self.width, self.height, self.offsetX, self.offsetY)
+
+			self.output.seek(self.offset)
+			self.output.write(header)
+
+			header = imageheaderfmt.pack(other.name.encode("ascii"), other.used, other.payload, other.width, other.height, other.offsetX, other.offsetY)
+
+			other.output.seek(other.offset)
+			other.output.write(header)
+
+
+	def merge(self, key, other):
+		try:
+			self.mergers.append(other)
+		except AttributeError:
+			self.mergers = [other]
+			self.key = key
 
 
 	def load(self):
@@ -139,6 +238,11 @@ class RRImage:
 	def shrink(self):
 		self.splitpayload()
 
+		self._shrink()
+
+		self.joinpayload()
+
+	def _shrink(self):
 		self.removetop()
 
 		self.removebottom()
@@ -147,20 +251,18 @@ class RRImage:
 
 		self.removeright()
 
-		self.joinpayload()
-
 
 	def finish(self):
 		# align to blocksize
-		RRImage.used += self.blocksize-1
-		RRImage.used &= ~(self.blocksize-1)
+		self.used += self.blocksize-1
+		self.used &= ~(self.blocksize-1)
 
 		header = imageheaderfmt.pack(self.name.encode("ascii"), self.used, len(self.payload), self.width, self.height, self.offsetX, self.offsetY)
 
 		self.output.seek(self.used)
 		self.output.write(self.payload)
 
-		RRImage.used += len(self.payload)
+		RRImage.used = self.used + len(self.payload)
 
 		self.output.seek(self.offset)
 		self.output.write(header)
@@ -433,7 +535,7 @@ if __name__ == "__main__":
 	for offset in range(blocksize, blocksize+count*imageheaderfmt.size, imageheaderfmt.size):
 		RRImage.entry(offset)
 
-	RRImage.dolate()
+	RRImage.late()
 
 
 	header = headerfmt.pack(magic, count, unknown, dev, RRImage.used)
