@@ -101,6 +101,9 @@ class RRImage:
 			later = True
 			part = name.partition("2nd")
 			key = part[0]+part[2]
+#		elif "system_recovery_menu_image" in name:
+#			later = True
+#			key = "factory_reset__line_image"
 
 		entry = RRImage(offset, name, dataoffset, expect, width, height, offsetX, offsetY)
 
