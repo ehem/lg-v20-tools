@@ -28,6 +28,8 @@ import struct
 
 from collections import deque
 
+from PIL import Image
+
 
 imageheaderfmt = struct.Struct("<40s6L")
 
@@ -123,6 +125,50 @@ class RRImage:
 
 
 	@staticmethod
+	def dologo(image):
+		self = RRImage
+		logo = self.logo
+
+		logo.offsetX += (logo.width-image.width)/2
+		logo.offsetY += (logo.height-image.height)/2
+
+		if logo.offsetX < 0:
+			print("WARNING: New logo is wider than display, corruption likely!", file=sys.stderr)
+			logo.offsetX = 0
+		if logo.offsetY < 0:
+			print("WARNING: New logo is taller than display, corruption likely!", file=sys.stderr)
+			logo.offsetY = 0
+
+		logo.width = image.width
+		logo.height = image.height
+
+		data = image.getdata()
+
+		logo.payload = b''
+		count = 0
+		prev = (data[0][0]^1, 0, 0)
+
+		for p in data:
+			if p == prev:
+				count += 1
+
+				if count >= 255:
+					logo.payload += '\xFF' + chr(p[2]) + chr(p[1]) + chr(p[0])
+					count -= 255
+
+			else:
+				logo.payload += chr(count) + chr(prev[2]) + chr(prev[1]) + chr(prev[0])
+				count = 1
+				prev = p
+
+		if count > 0:
+			logo.payload += chr(count) + chr(prev[2]) + chr(prev[1]) + chr(prev[0])
+		logo.payload = logo.payload[4:]
+
+		logo.finish()
+
+
+	@staticmethod
 	def late():
 		for entr in RRImage.delayed:
 			entr.dolate()
@@ -133,9 +179,7 @@ class RRImage:
 			if len(self.mergers) <= 1:
 				raise AttributeError()
 		except AttributeError:
-			self.load()
-			self.shrink()
-			self.finish()
+			RRImage.logo = self
 			return
 
 		other = self.mergers[1]
@@ -473,24 +517,24 @@ class RRImage:
 
 
 if __name__ == "__main__":
-	if len(sys.argv) == 3:
+	if len(sys.argv) == 4:
 		try:
-			output = io.open(sys.argv[2], "wb")
+			output = io.open(sys.argv[3], "wb")
 		except IOError as err:
-			print('Failed while opening output file "{:s}": {:s}'.format(sys.argv[2], str(err)), file=sys.stderr)
+			print('Failed while opening output file "{:s}": {:s}'.format(sys.argv[3], str(err)), file=sys.stderr)
 			sys.exit(1)
-	elif len(sys.argv) != 2:
-		print("Usage: {:s} <input file> [<output file>]".format(sys.argv[0]), file=sys.stderr)
+	elif len(sys.argv) != 3:
+		print("Usage: {:s} <new logo> <input file> [<output file>]".format(sys.argv[0]), file=sys.stderr)
 		sys.exit(1)
 	else:
 		try:
-			output = io.open(sys.argv[1]+".out", "wb")
+			output = io.open(sys.argv[2]+".out", "wb")
 		except IOError as err:
-			print('Failed while opening output file "{:s}": {:s}'.format(sys.argv[1]+".out", str(err)), file=sys.stderr)
+			print('Failed while opening output file "{:s}": {:s}'.format(sys.argv[2]+".out", str(err)), file=sys.stderr)
 	try:
-		input = io.open(sys.argv[1], "rb")
+		input = io.open(sys.argv[2], "rb")
 	except IOError as err:
-		print('Failed while opening input file "{}": {}'.format(sys.argv[1], str(err)), file=sys.stderr)
+		print('Failed while opening input file "{}": {}'.format(sys.argv[2], str(err)), file=sys.stderr)
 		sys.exit(1)
 
 	header = input.read(headerfmt.size)
@@ -539,6 +583,18 @@ if __name__ == "__main__":
 		RRImage.entry(offset)
 
 	RRImage.late()
+
+
+
+	try:
+		newlogo = Image.open(sys.argv[1], "r")
+		newlogo.convert(mode="RGB")
+	except IOError as err:
+		print('Failed while opening new logo file "{}": {}'.format(sys.argv[1], str(err)), file=sys.stderr)
+		sys.exit(1)
+
+	RRImage.dologo(newlogo)
+
 
 
 	header = headerfmt.pack(magic, count, unknown, dev, RRImage.used)
