@@ -360,7 +360,7 @@ class RRImage:
 		self.payload = payload.popleft()[:-4]
 
 		while payload:
-			if count >= 255:
+			if count > 255:
 				self.payload += '\xFF' + pixel
 				count -= 255
 			elif payload[0][1:3] == pixel:
@@ -375,6 +375,9 @@ class RRImage:
 				self.payload += payload.popleft()[:-4]
 
 		if count:
+			if count > 255:
+				self.payload += '\xFF' + pixel
+				count -= 255
 			self.payload += chr(count) + pixel
 
 
