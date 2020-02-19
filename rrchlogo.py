@@ -152,7 +152,7 @@ class RRImage:
 			if p == prev:
 				count += 1
 
-				if count >= 255:
+				if count > 255:
 					logo.payload += '\xFF' + chr(p[2]) + chr(p[1]) + chr(p[0])
 					count -= 255
 
@@ -162,6 +162,9 @@ class RRImage:
 				prev = p
 
 		if count > 0:
+			if count > 255:
+				logo.payload += '\xFF' + chr(prev[2]) + chr(prev[1]) + chr(prev[0])
+				count -= 255
 			logo.payload += chr(count) + chr(prev[2]) + chr(prev[1]) + chr(prev[0])
 		logo.payload = logo.payload[4:]
 
