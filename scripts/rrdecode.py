@@ -121,6 +121,8 @@ def dumpimage(file, offset, blocksize):
 	count = 0
 	pixels = 0
 
+	bins = [0 for undef in range(256)]
+
 	while pixels<width*height:
 		try:
 			pixel = file.read(4)
@@ -132,6 +134,7 @@ def dumpimage(file, offset, blocksize):
 			image.close()
 			return True
 		pixel = bytearray(pixel)
+		bins[pixel[0]] += 1
 		# this RLE format allows lines to wrap around!
 		next = pixels + pixel[0]
 		if pixels//width != next//width:
@@ -149,6 +152,8 @@ def dumpimage(file, offset, blocksize):
 		image.write(u"# took expected 0x{0:08X}/0x{0:010d} bytes encoded\n".format(expect))
 	else:
 		image.write(u"# took unexpected 0x{0:X}/0d{0:d} chunks (0x{1:X}/0d{1:d} bytes) to account for needed data\n".format(count, count<<2))
+
+	image.write(u"# run-length stats: {:d} zero{:s}, {:d} single, {:d} max-length(255)\n".format(bins[0], "" if bins[0]<=0 else "(bug?)", bins[1], bins[255]))
 
 	image.close()
 
