@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Copyright (C) 2019 Elliott Mitchell
+Copyright (C) 2019-2020 Elliott Mitchell
 
 	This program is free software: you can redistribute it and/or
 	modify it under the terms of the GNU General Public License as
