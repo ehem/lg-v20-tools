@@ -36,6 +36,11 @@ imageheaderfmt = struct.Struct("<40s6L")
 headerfmt = struct.Struct("<16s2L16s1L")
 
 
+__tochr = struct.Struct("B")
+def tochr(ch):
+	return __tochr.pack(ch)
+
+
 class RRImage:
 
 	# where our source material comes from
@@ -129,8 +134,8 @@ class RRImage:
 		self = RRImage
 		logo = self.logo
 
-		logo.offsetX += (logo.width-image.width)/2
-		logo.offsetY += (logo.height-image.height)/2
+		logo.offsetX += (logo.width-image.width)//2
+		logo.offsetY += (logo.height-image.height)//2
 
 		if logo.offsetX < 0:
 			print("WARNING: New logo is wider than display, corruption likely!", file=sys.stderr)
@@ -153,19 +158,19 @@ class RRImage:
 				count += 1
 
 				if count > 255:
-					logo.payload += '\xFF' + chr(p[2]) + chr(p[1]) + chr(p[0])
+					logo.payload += b'\xFF' + tochr(p[2]) + tochr(p[1]) + tochr(p[0])
 					count -= 255
 
 			else:
-				logo.payload += chr(count) + chr(prev[2]) + chr(prev[1]) + chr(prev[0])
+				logo.payload += tochr(count) + tochr(prev[2]) + tochr(prev[1]) + tochr(prev[0])
 				count = 1
 				prev = p
 
 		if count > 0:
 			if count > 255:
-				logo.payload += '\xFF' + chr(prev[2]) + chr(prev[1]) + chr(prev[0])
+				logo.payload += b'\xFF' + tochr(prev[2]) + tochr(prev[1]) + tochr(prev[0])
 				count -= 255
-			logo.payload += chr(count) + chr(prev[2]) + chr(prev[1]) + chr(prev[0])
+			logo.payload += tochr(count) + tochr(prev[2]) + tochr(prev[1]) + tochr(prev[0])
 		logo.payload = logo.payload[4:]
 
 		logo.finish()
@@ -323,19 +328,19 @@ class RRImage:
 		payload = deque()
 
 		while self.payload:
-			count = ord(self.payload[0])
+			count = ord(self.payload[0:1])
 			current = 0
 			while count < self.width and len(self.payload) > current+4:
 				current += 4
-				count += ord(self.payload[current])
+				count += ord(self.payload[current:current+1])
 			payload.append(self.payload[:current])
 			if count == self.width:
 				payload[-1] += self.payload[current:current+4]
 				self.payload = self.payload[current+4:]
 			elif count > self.width:
 				count -= self.width
-				payload[-1] += chr(ord(self.payload[current])-count)+self.payload[current+1:current+4]
-				self.payload = chr(count)+self.payload[current+1:]
+				payload[-1] += tochr(ord(self.payload[current:current+1])-count)+self.payload[current+1:current+4]
+				self.payload = tochr(count)+self.payload[current+1:]
 			else:
 				payload.pop()
 				self.payload = b''
@@ -359,29 +364,29 @@ class RRImage:
 		payload = self.payload
 
 		pixel = payload[0][-3:]
-		count = ord(payload[0][-4])
+		count = ord(payload[0][-4:-3])
 		self.payload = payload.popleft()[:-4]
 
 		while payload:
 			if count > 255:
-				self.payload += '\xFF' + pixel
+				self.payload += b'\xFF' + pixel
 				count -= 255
 			elif payload[0][1:3] == pixel:
-				count += ord(payload[0][0])
+				count += ord(payload[0][0:1])
 				payload[0] = payload[0][4:]
 				if not payload[0]:
 					payload.popleft()
 			else:
-				self.payload += chr(count) + pixel
+				self.payload += tochr(count) + pixel
 				pixel = payload[0][-3:]
-				count = ord(payload[0][-4])
+				count = ord(payload[0][-4:-3])
 				self.payload += payload.popleft()[:-4]
 
 		if count:
 			if count > 255:
-				self.payload += '\xFF' + pixel
+				self.payload += b'\xFF' + pixel
 				count -= 255
-			self.payload += chr(count) + pixel
+			self.payload += tochr(count) + pixel
 
 
 	def removetop(self):
@@ -440,12 +445,12 @@ class RRImage:
 		payload = self.payload
 
 		pixel = payload[0][1:4]
-		max = ord(payload[0][0])
+		max = ord(payload[0][0:1])
 		for x in range(4, len(payload[0]), 4):
 			if payload[0][x+1:x+4] != pixel:
 				max -= 1
 				break
-			max += ord(payload[0][x])
+			max += ord(payload[0][x:x+1])
 
 		for y in range(1, len(payload)):
 			cur = 0
@@ -453,7 +458,7 @@ class RRImage:
 				if payload[y][x+1:x+4] != pixel:
 					max = cur - 1
 					break
-				cur += ord(payload[y][x])
+				cur += ord(payload[y][x:x+1])
 				if cur >= max:
 					break
 
@@ -463,13 +468,13 @@ class RRImage:
 		for y in range(0, len(payload)):
 			cur = max
 			for x in range(0, len(payload[y]), 4):
-				if ord(payload[y][x]) == cur:
+				if ord(payload[y][x:x+1]) == cur:
 					payload[y] = payload[y][x+4:]
 					break
-				elif ord(payload[y][x]) > cur:
-					payload[y] = chr(ord(payload[y][x])-cur) + payload[y][x+1:]
+				elif ord(payload[y][x:x+1]) > cur:
+					payload[y] = tochr(ord(payload[y][x:x+1])-cur) + payload[y][x+1:]
 					break
-				cur -= ord(payload[y][x])
+				cur -= ord(payload[y][x:x+1])
 
 		self.offsetX += max
 		self.width -= max
@@ -485,12 +490,12 @@ class RRImage:
 		payload = self.payload
 
 		pixel = payload[0][-3:]
-		max = ord(payload[0][-4])
+		max = ord(payload[0][-4:-3])
 		for x in range(len(payload[0])-8, -1, -4):
 			if payload[0][x+1:x+4] != pixel:
 				max -= 1
 				break
-			max += ord(payload[0][x])
+			max += ord(payload[0][x:x+1])
 
 		for y in range(1, len(payload)):
 			cur = 0
@@ -498,7 +503,7 @@ class RRImage:
 				if payload[y][x+1:x+4] != pixel:
 					max = cur - 1
 					break
-				cur += ord(payload[y][x])
+				cur += ord(payload[y][x:x+1])
 				if cur >= max:
 					break
 
@@ -508,13 +513,13 @@ class RRImage:
 		for y in range(0, len(payload)):
 			cur = max
 			for x in range(len(payload[y])-4, -1, -4):
-				if ord(payload[y][x]) == cur:
+				if ord(payload[y][x:x+1]) == cur:
 					payload[y] = payload[y][:x]
 					break
-				elif ord(payload[y][x]) > cur:
-					payload[y] = payload[y][:x] + chr(ord(payload[y][x])-cur) + payload[y][x+1:x+4]
+				elif ord(payload[y][x:x+1]) > cur:
+					payload[y] = payload[y][:x] + tochr(ord(payload[y][x:x+1])-cur) + payload[y][x+1:x+4]
 					break
-				cur -= ord(payload[y][x])
+				cur -= ord(payload[y][x:x+1])
 
 		self.width -= max
 		self.removedright += max
